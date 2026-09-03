@@ -1,0 +1,44 @@
+@if (!vivace.isLoggedIn()) {
+  <vivace-auth />
+} @else {
+  <div class="min-h-screen flex flex-col bg-[#FDFBF7] text-[#2D3748]">
+    <header class="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#E2E8F0] shadow-sm">
+      <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-16 sm:min-h-[72px] flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3 sm:gap-5">
+          <button type="button" (click)="viewingRecordId.set(null)" class="flex items-center gap-2 text-left">
+            <span class="w-9 h-9 rounded-xl bg-[#134E4A] text-white grid place-items-center font-bold">V</span>
+            <span class="hidden sm:block"><strong class="block tracking-[0.14em] text-[#134E4A]">VIVACE</strong><small class="block text-[9px] text-[#718096] uppercase">Pós-operatório</small></span>
+          </button>
+          <span class="px-3 py-1.5 rounded-xl bg-[#E6F4F1] border border-[#D1FAE5] text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-[#134E4A]">{{ vivace.currentRole() === 'professional' ? 'Painel profissional' : vivace.currentRole() === 'patient' ? 'Portal do paciente' : 'Painel de cadastros' }}</span>
+        </div>
+
+        <div class="flex items-center gap-2 sm:gap-3">
+          @if (vivace.currentRole() === 'professional') {
+            <div class="relative">
+              <button type="button" (click)="showAlerts.set(!showAlerts())" class="relative px-3 py-2 bg-[#F8FAFC] rounded-xl text-xs font-bold text-[#718096]" aria-label="Abrir alertas">Alertas @if (alertPatients().length) {<span class="ml-1 px-1.5 py-0.5 bg-[#FF7F66] text-white rounded-full">{{ alertPatients().length }}</span>}</button>
+              @if (showAlerts()) {<div class="absolute right-0 mt-2 w-80 sm:w-96 p-4 bg-white rounded-3xl shadow-xl border border-[#E2E8F0]"><h2 class="text-xs font-bold text-[#134E4A] pb-2 border-b">Triagem em aberto</h2><div class="space-y-2 mt-2 max-h-72 overflow-y-auto">@for (patient of alertPatients(); track patient.id) {<button type="button" (click)="openPatient(patient.id)" class="w-full p-3 bg-[#F8FAFC] hover:bg-[#E6F4F1] rounded-2xl text-left"><strong class="text-xs">{{ patient.name }} · D+{{ patient.postOpDay }}</strong><span class="block text-[10px] text-[#718096]">{{ patient.status === 'critico' ? 'Alerta crítico' : patient.status === 'atencao' ? 'Atenção clínica' : 'Foto pendente' }} · Dor {{ patient.currentPain }}/10 · {{ patient.currentTemp }}°C</span></button>} @empty {<p class="py-5 text-center text-xs text-[#718096]">Nenhum alerta em aberto.</p>}</div></div>}
+            </div>
+          }
+
+          <div class="flex items-center gap-2 pl-2 border-l"><img [src]="vivace.currentRole() === 'patient' ? vivace.selectedPatient().avatar : vivace.professionalUser().avatar" alt="Usuário" class="w-8 h-8 rounded-full object-cover" /><div class="hidden lg:block"><strong class="block text-xs">{{ vivace.currentRole() === 'professional' ? vivace.professionalUser().name : vivace.currentRole() === 'patient' ? vivace.selectedPatient().name : 'Administração Vivace' }}</strong><small class="block text-[10px] text-[#718096]">{{ vivace.currentRole() === 'professional' ? vivace.professionalUser().crmCoren : vivace.currentRole() === 'patient' ? 'Paciente em recuperação' : 'Gestão de cadastros' }}</small></div><button type="button" (click)="vivace.resetToDefaults()" title="Restaurar demonstração" class="p-2 text-[#718096] text-xs">↻</button><button type="button" (click)="logout()" title="Sair" class="p-2 text-[#C2412D] text-xs font-bold">Sair</button></div>
+        </div>
+      </div>
+    </header>
+
+    <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+      @if (vivace.currentRole() === 'professional') {
+        @if (viewingRecordId(); as patientId) {
+          <vivace-patient-record [patientId]="patientId" (back)="viewingRecordId.set(null)" />
+        } @else {
+          <vivace-professional-dashboard (openPatient)="openPatient($event)" />
+        }
+      } @else if (vivace.currentRole() === 'patient') {
+        <vivace-patient-portal />
+      } @else {
+        <vivace-admin-dashboard />
+      }
+    </main>
+
+    <footer class="py-5 border-t bg-white text-center text-[11px] text-[#718096]"><div class="max-w-7xl mx-auto px-4"><span><strong class="text-[#134E4A]">VIVACE</strong> · Acompanhamento pós-operatório humanizado</span></div></footer>
+  </div>
+}

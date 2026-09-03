@@ -1,0 +1,6 @@
+{
+  "name": "VIVACE - Prontuário Digital Pós-Operatório",
+  "description": "Plataforma humanizada de prontuário digital e acompanhamento pós-operatório com painel profissional para equipe cirúrgica e portal mobile-first para pacientes.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

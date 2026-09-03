@@ -1,0 +1,71 @@
+@if (patient(); as patient) {
+  <div ngTabs class="space-y-6 pb-12">
+    <div class="flex items-center justify-between gap-3">
+      <button type="button" (click)="back.emit()" class="px-4 py-2.5 bg-white border border-[#E2E8F0] rounded-2xl text-xs font-bold shadow-sm">← Voltar aos pacientes</button>
+      <label class="text-xs font-bold text-[#718096]">Status clínico
+        <select [ngModel]="patient.status" (ngModelChange)="updateStatus($event)" class="ml-2 px-3 py-2 rounded-xl border border-[#E2E8F0] bg-white text-[#2D3748]">
+          <option value="estavel">Estável</option><option value="atencao">Atenção</option><option value="critico">Alerta crítico</option>
+        </select>
+      </label>
+    </div>
+
+    <section class="bg-white rounded-3xl p-6 sm:p-7 border border-[#E2E8F0] shadow-sm relative overflow-hidden">
+      <div class="absolute top-0 inset-x-0 h-2" [class.bg-[#FF7F66]]="patient.status === 'critico'" [class.bg-[#D97706]]="patient.status === 'atencao'" [class.bg-[#134E4A]]="patient.status === 'estavel'"></div>
+      <div class="flex flex-col lg:flex-row justify-between gap-6 pt-2">
+        <div class="flex gap-4"><img [src]="patient.avatar" [alt]="patient.name" class="w-20 h-20 rounded-2xl object-cover" /><div><h1 class="text-2xl font-bold">{{ patient.name }} <span class="text-xs px-3 py-1 bg-[#D1FAE5] text-[#134E4A] rounded-xl">D+{{ patient.postOpDay }}</span></h1><p class="text-sm font-bold text-[#134E4A]">{{ patient.procedure }}</p><p class="text-xs text-[#718096] mt-1">{{ patient.age }} anos · CPF {{ patient.cpf }} · {{ patient.hospital }}</p>@if (patient.allergies.length) {<p class="inline-block mt-3 text-[11px] font-bold text-[#C2412D] bg-[#FFE5E0] px-3 py-1 rounded-full">Alergias: {{ patient.allergies.join(', ') }}</p>}</div></div>
+        <div class="bg-[#F8FAFC] rounded-2xl p-4 border border-[#E2E8F0] text-xs min-w-72 space-y-2"><p class="flex justify-between"><span class="text-[#718096]">Cirurgia</span><strong>{{ patient.surgeryDate }}</strong></p><p class="flex justify-between"><span class="text-[#718096]">Cirurgião</span><strong>{{ patient.surgeon }}</strong></p><p class="flex justify-between"><span class="text-[#718096]">Contato</span><a [href]="'tel:' + patient.emergencyContact.phone" class="font-bold text-[#134E4A]">{{ patient.emergencyContact.name }}</a></p></div>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-[#F1F5F9]">
+        <div class="clinical-stat"><small>Dor atual</small><strong>{{ patient.currentPain }}/10</strong></div><div class="clinical-stat"><small>Temperatura</small><strong>{{ patient.currentTemp }}°C</strong></div><div class="clinical-stat"><small>Pressão e pulso</small><strong>{{ patient.bloodPressure }} · {{ patient.heartRate }} bpm</strong></div><div class="clinical-stat"><small>Adesão</small><strong>{{ patient.medicationAdherencePercent }}%</strong></div>
+      </div>
+    </section>
+
+    <nav ngTabList selectionMode="explicit" [(selectedTab)]="activeTab" aria-label="Seções do prontuário clínico" class="flex gap-2 overflow-x-auto pb-2">
+      <button ngTab value="wounds" type="button" class="record-tab">Ferida ({{ patient.woundPhotos.length }})</button>
+      <button ngTab value="timeline" type="button" class="record-tab">Linha do tempo</button>
+      <button ngTab value="vitals" type="button" class="record-tab">Check-ins</button>
+      <button ngTab value="meds" type="button" class="record-tab">Medicamentos</button>
+      <button ngTab value="chat" type="button" class="record-tab">Mensagens</button>
+      <button ngTab value="notes" type="button" class="record-tab">Anotações</button>
+    </nav>
+
+    <div ngTabPanel value="wounds">
+    @if (activeTab() === 'wounds') {
+      <div class="grid lg:grid-cols-12 gap-6">
+        <section class="lg:col-span-7 bg-white rounded-3xl p-5 border border-[#E2E8F0] shadow-sm">
+          <h2 class="font-bold">Registro fotográfico da ferida</h2><p class="text-xs text-[#718096] mb-4">Acompanhamento visual da cicatrização.</p>
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">@for (photo of patient.woundPhotos; track photo.id) {<button type="button" (click)="selectPhoto(photo)" class="relative rounded-2xl overflow-hidden border-2" [class.border-[#134E4A]]="selectedPhoto().id === photo.id"><img [src]="photo.imageUrl" [alt]="photo.dayLabel" class="w-full h-28 object-cover" /><span class="absolute bottom-2 left-2 text-xs font-bold text-white drop-shadow">{{ photo.dayLabel }}</span><small class="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-white/90 text-[#2D3748]">{{ photo.reviewStatus === 'pendente' ? 'Pendente' : 'Avaliada' }}</small></button>}</div>
+          @if (selectedPhoto(); as photo) {<div class="p-4 bg-[#F8FAFC] rounded-2xl"><img [src]="photo.imageUrl" alt="Ferida cirúrgica" class="w-full max-h-80 object-contain rounded-xl bg-black" /><p class="text-xs mt-3"><strong>Relato:</strong> {{ photo.patientNotes || 'Sem observações.' }}</p>@if (photo.reviewFeedback) {<div class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs text-[#134E4A]"><strong>Parecer de {{ photo.reviewedBy }}</strong><p>{{ photo.reviewFeedback }}</p></div>}</div>}
+        </section>
+        <section class="lg:col-span-5 bg-white rounded-3xl p-6 border border-[#E2E8F0] shadow-sm">
+          <h2 class="font-bold">Parecer clínico da ferida</h2><p class="text-xs text-[#718096] mb-4">Classifique e envie uma orientação ao paciente.</p>
+          <div class="grid grid-cols-2 gap-2"><button type="button" (click)="reviewVerdict.set('avaliado_adequado')" class="review-choice" [class.selected-review]="reviewVerdict() === 'avaliado_adequado'">Adequado<small>Sem complicações</small></button><button type="button" (click)="reviewVerdict.set('requer_atencao')" class="review-choice" [class.selected-review-alert]="reviewVerdict() === 'requer_atencao'">Requer atenção<small>Necessita avaliação</small></button></div>
+          <textarea rows="6" [ngModel]="reviewComment()" (ngModelChange)="reviewComment.set($event)" class="w-full mt-4 p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-xs"></textarea>
+          <button type="button" (click)="saveReview()" class="w-full mt-3 py-3 bg-[#134E4A] text-white rounded-xl text-xs font-bold">Gravar parecer e notificar paciente</button>
+          @if (savedMessage()) {<p class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#134E4A]">{{ savedMessage() }}</p>}
+        </section>
+      </div>
+    }
+    </div>
+
+    <div ngTabPanel value="timeline">
+    @if (activeTab() === 'timeline') {<section class="content-card"><h2 class="font-bold mb-5">Linha do tempo pós-operatória</h2><div class="space-y-3">@for (event of patient.timeline; track event.id) {<article class="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl"><div class="flex justify-between gap-3"><strong class="text-sm">{{ event.dayLabel }} · {{ event.title }}</strong><small class="text-[#A0AEC0]">{{ event.date }}</small></div><p class="text-xs text-[#718096] mt-1">{{ event.description }}</p><small class="text-[#A0AEC0]">Registrado por {{ event.author }}</small></article>}</div></section>}
+    </div>
+
+    <div ngTabPanel value="vitals">
+    @if (activeTab() === 'vitals') {<div class="space-y-5"><section class="grid lg:grid-cols-2 gap-4"><article class="content-card p-3"><div highchartsChart [options]="painChartOptions()" class="clinical-chart"></div></article><article class="content-card p-3"><div highchartsChart [options]="temperatureChartOptions()" class="clinical-chart"></div></article></section><section class="content-card"><h2 class="font-bold mb-4">Autoavaliações detalhadas</h2><div class="grid md:grid-cols-2 gap-3">@for (checkin of patient.checkIns; track checkin.id) {<article class="p-4 bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0]"><div class="flex justify-between"><strong>{{ checkin.dayLabel }} · {{ checkin.date }}</strong><span class="text-xs font-bold">Dor {{ checkin.painLevel }}/10 · {{ checkin.temperature }}°C</span></div><p class="text-xs text-[#718096] mt-2">Mobilidade: {{ checkin.mobilityScore.replace('_', ' ') }}</p><p class="text-xs text-[#718096]">{{ checkin.notes || 'Sem observações adicionais.' }}</p></article>}</div></section></div>}
+    </div>
+
+    <div ngTabPanel value="meds">
+    @if (activeTab() === 'meds') {<section class="content-card"><div class="flex justify-between"><h2 class="font-bold">Prescrição domiciliar</h2><strong class="text-[#134E4A]">Adesão {{ patient.medicationAdherencePercent }}%</strong></div><div class="space-y-3 mt-4">@for (med of patient.medications; track med.id) {<article class="p-4 bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0]"><strong>{{ med.name }} · {{ med.dose }}</strong><p class="text-xs text-[#134E4A] font-bold">{{ med.purpose }}</p><p class="text-xs text-[#718096] my-2">{{ med.instructions }}</p><div class="flex gap-2">@for (time of med.times; track time) {<span class="text-xs px-2.5 py-1 rounded-xl" [class.bg-[#D1FAE5]]="med.takenToday[time]" [class.bg-[#E2E8F0]]="!med.takenToday[time]">{{ time }} · {{ med.takenToday[time] ? 'Tomado' : 'Pendente' }}</span>}</div></article>}</div></section>}
+    </div>
+
+    <div ngTabPanel value="chat">
+    @if (activeTab() === 'chat') {<section class="content-card"><h2 class="font-bold">Canal direto com {{ patient.name }}</h2><div class="space-y-3 max-h-96 overflow-y-auto py-4">@for (message of patient.messages; track message.id) {<div class="flex" [class.justify-end]="message.sender === 'equipe'"><div class="max-w-lg p-3 rounded-2xl text-xs" [class.bg-[#134E4A]]="message.sender === 'equipe'" [class.text-white]="message.sender === 'equipe'" [class.bg-[#F8FAFC]]="message.sender === 'paciente'"><strong class="block text-[10px] opacity-70">{{ message.senderName }} · {{ message.timestamp }}</strong>{{ message.text }}</div></div>}</div><form (ngSubmit)="sendChat()" class="flex gap-2"><input name="chat" [(ngModel)]="chatMessage" placeholder="Escreva uma orientação..." class="flex-1 px-4 py-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-sm" /><button class="px-5 bg-[#134E4A] text-white rounded-xl text-xs font-bold">Enviar</button></form></section>}
+    </div>
+
+    <div ngTabPanel value="notes">
+    @if (activeTab() === 'notes') {<section class="content-card"><h2 class="font-bold">Anotações internas da equipe</h2><form (ngSubmit)="addNote()" class="my-4 p-4 bg-[#F8FAFC] rounded-2xl"><textarea name="note" [(ngModel)]="noteText" rows="3" placeholder="Nova evolução clínica..." class="w-full p-3 bg-white border border-[#E2E8F0] rounded-xl text-xs"></textarea><button class="mt-2 px-4 py-2 bg-[#134E4A] text-white rounded-xl text-xs font-bold">Salvar nota</button></form><div class="space-y-3">@for (note of patient.clinicalNotes; track note.id) {<article class="p-4 border border-[#E2E8F0] rounded-2xl text-xs"><div class="flex justify-between"><strong>{{ note.author }}</strong><small>{{ note.date }}</small></div><p class="text-[#718096] mt-1">{{ note.text }}</p></article>}</div></section>}
+    </div>
+  </div>
+}

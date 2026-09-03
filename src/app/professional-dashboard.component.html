@@ -1,0 +1,81 @@
+<div class="space-y-6">
+  <section class="bg-gradient-to-r from-[#134E4A] via-[#10433F] to-[#0A2D2A] rounded-3xl p-6 sm:p-8 text-white shadow-md relative overflow-hidden">
+    <div class="absolute -top-24 -right-16 w-72 h-72 bg-[#D1FAE5]/10 rounded-full blur-3xl"></div>
+    <div class="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
+      <div>
+        <span class="inline-flex px-3 py-1 rounded-full bg-white/15 text-[#D1FAE5] text-xs font-bold border border-white/20">Plantão de monitoramento ativo</span>
+        <h1 class="text-2xl sm:text-3xl font-bold mt-3">Olá, {{ vivace.professionalUser().name }}</h1>
+        <p class="text-teal-100/90 text-sm mt-1 max-w-xl italic">
+          {{ vivace.patients().length }} pacientes em recuperação domiciliar.
+          {{ criticalCount() ? criticalCount() + ' paciente(s) requer(em) atenção imediata.' : 'Todos evoluem com estabilidade.' }}
+        </p>
+      </div>
+      <div class="flex gap-3">
+        <div class="bg-white/10 rounded-2xl p-4 border border-white/15 text-center min-w-28"><strong class="block text-2xl">{{ vivace.patients().length }}</strong><span class="text-[10px] uppercase text-[#D1FAE5]">Pacientes ativos</span></div>
+        <div class="bg-[#FF7F66]/25 rounded-2xl p-4 border border-[#FF7F66]/40 text-center min-w-28"><strong class="block text-2xl">{{ criticalCount() }}</strong><span class="text-[10px] uppercase text-[#FFE5E0]">Alertas críticos</span></div>
+      </div>
+    </div>
+  </section>
+
+  @if (criticalPatients()[0]; as critical) {
+    <section class="bg-white border border-[#FF7F66]/40 border-l-4 border-l-[#FF7F66] rounded-3xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <span class="text-[10px] font-bold uppercase tracking-wider text-[#C2412D] bg-[#FFE5E0] px-2.5 py-1 rounded-full">Triagem prioritária</span>
+        <h2 class="text-base font-bold mt-2">{{ critical.name }} · D+{{ critical.postOpDay }} {{ critical.procedure }}</h2>
+        <p class="text-xs text-[#718096] mt-1">Dor {{ critical.currentPain }}/10 · Temperatura {{ critical.currentTemp }}°C · {{ critical.checkIns[0]?.notes || 'Sinais vitais fora da faixa esperada.' }}</p>
+      </div>
+      <div class="flex gap-2 shrink-0">
+        <a [href]="'tel:' + critical.phone" class="px-4 py-2.5 text-[#C2412D] border border-[#FF7F66]/40 rounded-2xl text-xs font-bold">Ligar</a>
+        <button type="button" (click)="openPatient.emit(critical.id)" class="px-4 py-2.5 bg-[#FF7F66] text-white rounded-2xl text-xs font-bold">Abrir prontuário</button>
+      </div>
+    </section>
+  }
+
+  <section class="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+    <button type="button" (click)="statusFilter.set('todos')" class="metric-card"><span>Pacientes</span><strong>{{ vivace.patients().length }}</strong><small>Em seguimento</small></button>
+    <button type="button" (click)="statusFilter.set('critico')" class="metric-card border-l-4 border-l-[#FF7F66]"><span class="text-[#C2412D]">Críticos</span><strong class="text-[#C2412D]">{{ criticalCount() }}</strong><small>Dor elevada ou febre</small></button>
+    <button type="button" (click)="statusFilter.set('atencao')" class="metric-card"><span class="text-[#92400E]">Atenção</span><strong class="text-[#92400E]">{{ attentionCount() }}</strong><small>Sintomas moderados</small></button>
+    <button type="button" (click)="statusFilter.set('pendente_foto')" class="metric-card"><span>Fotos pendentes</span><strong>{{ pendingCount() }}</strong><small>Aguardando parecer</small></button>
+  </section>
+
+  <section class="bg-white rounded-3xl p-4 sm:p-5 border border-[#E2E8F0] shadow-sm space-y-4">
+    <div class="flex flex-col lg:flex-row gap-3 justify-between">
+      <input type="search" [ngModel]="searchQuery()" (ngModelChange)="searchQuery.set($event)" placeholder="Buscar por paciente, cirurgia ou CPF..." class="flex-1 px-4 py-2.5 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-[#134E4A]/20" />
+      <div class="flex flex-wrap gap-2">
+        <button type="button" (click)="statusFilter.set('todos')" class="filter-pill" [class.selected-filter]="statusFilter() === 'todos'">Todos</button>
+        <button type="button" (click)="statusFilter.set('critico')" class="filter-pill" [class.selected-filter]="statusFilter() === 'critico'">Críticos</button>
+        <button type="button" (click)="statusFilter.set('atencao')" class="filter-pill" [class.selected-filter]="statusFilter() === 'atencao'">Atenção</button>
+        <button type="button" (click)="statusFilter.set('estavel')" class="filter-pill" [class.selected-filter]="statusFilter() === 'estavel'">Estáveis</button>
+      </div>
+    </div>
+    <div class="flex flex-wrap gap-2 pt-3 border-t border-[#F1F5F9] text-xs">
+      <span class="font-bold text-[#718096] py-1">Fase:</span>
+      <button type="button" (click)="dayFilter.set('todos')" class="phase-pill" [class.selected-phase]="dayFilter() === 'todos'">Todas</button>
+      <button type="button" (click)="dayFilter.set('d0_d3')" class="phase-pill" [class.selected-phase]="dayFilter() === 'd0_d3'">D+0 a D+3</button>
+      <button type="button" (click)="dayFilter.set('d4_d7')" class="phase-pill" [class.selected-phase]="dayFilter() === 'd4_d7'">D+4 a D+7</button>
+      <button type="button" (click)="dayFilter.set('d8_plus')" class="phase-pill" [class.selected-phase]="dayFilter() === 'd8_plus'">D+8+</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="flex justify-between mb-3 px-1"><h2 class="text-xs font-bold uppercase tracking-wider text-[#718096]">Pacientes cadastrados ({{ filteredPatients().length }})</h2><span class="hidden sm:inline text-xs text-[#A0AEC0]">Selecione para abrir o prontuário</span></div>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      @for (patient of filteredPatients(); track patient.id) {
+        <button type="button" (click)="openPatient.emit(patient.id)" class="bg-white rounded-3xl p-5 border border-[#E2E8F0] border-l-4 text-left shadow-sm hover:shadow-md hover:border-[#134E4A]/40 transition-all" [class.border-l-[#FF7F66]]="patient.status === 'critico'" [class.border-l-[#D97706]]="patient.status === 'atencao'" [class.border-l-[#134E4A]]="patient.status === 'estavel'">
+          <div class="flex items-start justify-between gap-3">
+            <div class="flex gap-3"><img [src]="patient.avatar" [alt]="patient.name" class="w-14 h-14 rounded-2xl object-cover" /><div><h3 class="font-bold">{{ patient.name }} <small class="font-normal text-[#718096]">· {{ patient.age }} anos</small></h3><p class="text-xs font-bold text-[#134E4A]">{{ patient.procedure }}</p><p class="text-[11px] text-[#718096]">D+{{ patient.postOpDay }} · {{ patient.lastCheckInTime }}</p></div></div>
+            <span class="text-[10px] font-bold uppercase px-2.5 py-1 rounded-full" [class]="statusClasses(patient.status)">{{ statusLabel(patient.status) }}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 my-4 p-3 bg-[#F8FAFC] rounded-2xl text-xs">
+            <div><small class="block text-[#718096]">Dor EVA</small><strong>{{ patient.currentPain }}/10</strong></div>
+            <div><small class="block text-[#718096]">Temperatura</small><strong>{{ patient.currentTemp }}°C</strong></div>
+            <div><small class="block text-[#718096]">Adesão</small><strong>{{ patient.medicationAdherencePercent }}%</strong></div>
+          </div>
+          <div class="flex justify-between text-xs"><span [class.text-[#92400E]]="patient.woundReviewPending">{{ patient.woundReviewPending ? 'Foto aguardando avaliação' : 'Curativo avaliado' }}</span><strong class="text-[#134E4A]">Ver prontuário →</strong></div>
+        </button>
+      } @empty {
+        <div class="lg:col-span-2 bg-white rounded-3xl p-12 text-center border border-[#E2E8F0]"><h3 class="font-bold">Nenhum paciente encontrado</h3><p class="text-xs text-[#718096] mt-1">Altere os termos ou filtros utilizados.</p><button type="button" (click)="clearFilters()" class="mt-4 px-4 py-2 bg-[#F1F5F9] rounded-xl text-xs font-bold">Limpar filtros</button></div>
+      }
+    </div>
+  </section>
+</div>

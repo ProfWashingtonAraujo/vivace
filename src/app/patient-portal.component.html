@@ -1,0 +1,86 @@
+@if (patient(); as patient) {
+  <div ngTabs class="max-w-4xl mx-auto space-y-6 pb-12">
+    <nav ngTabList selectionMode="follow" [(selectedTab)]="activeTab" aria-label="Seções do portal do paciente" class="bg-white rounded-2xl p-1.5 border border-[#E2E8F0] shadow-sm flex gap-1.5 overflow-x-auto">
+      <button ngTab value="summary" type="button" class="patient-tab">Meu dia</button>
+      <button ngTab value="checkin" type="button" class="patient-tab">Check-in</button>
+      <button ngTab value="medications" type="button" class="patient-tab">Medicação</button>
+      <button ngTab value="care" type="button" class="patient-tab">Cuidados</button>
+      <button ngTab value="messages" type="button" class="patient-tab">Falar com a equipe</button>
+    </nav>
+
+    <div ngTabPanel value="summary">
+    @if (activeTab() === 'summary') {
+      <section class="bg-gradient-to-br from-[#134E4A] via-[#10433F] to-[#0A2D2A] rounded-3xl p-6 sm:p-7 text-white shadow-md relative overflow-hidden">
+        <div class="absolute -top-16 -right-16 w-56 h-56 bg-[#D1FAE5]/15 rounded-full blur-2xl"></div>
+        <div class="relative flex justify-between gap-4"><div><span class="inline-flex px-3 py-1 rounded-full bg-white/15 text-[#D1FAE5] text-xs font-bold border border-white/20">Seu cuidado pós-operatório</span><h1 class="text-2xl sm:text-3xl font-bold mt-2">Olá, {{ patient.name.split(' ')[0] }}!</h1><p class="text-xs sm:text-sm text-teal-100/90 mt-1">Você está no <strong>{{ patient.postOpDay }}º dia</strong> de recuperação de {{ patient.procedure }}.</p></div><div class="bg-white/10 rounded-2xl p-4 border border-white/15 text-center h-fit"><strong class="text-2xl">D+{{ patient.postOpDay }}</strong><small class="block text-[10px] text-[#D1FAE5] uppercase">Cicatrização</small></div></div>
+      </section>
+
+      <section class="content-card space-y-4">
+        <div class="flex justify-between gap-3"><div><h2 class="font-bold">Check-in de recuperação de hoje</h2><p class="text-xs text-[#718096]">@if (todayCheckIn(); as checkin) { Dor {{ checkin.painLevel }}/10 · Temperatura {{ checkin.temperature }}°C } @else { Você ainda não registrou sua avaliação. }</p></div><span class="text-xs font-bold px-3 py-1 h-fit rounded-xl bg-[#D1FAE5] text-[#134E4A]">{{ todayCheckIn() ? 'Enviado' : 'Pendente' }}</span></div>
+        @if (todayCheckIn(); as checkin) {<div class="grid grid-cols-2 sm:grid-cols-4 gap-2"><div class="summary-stat">Dor<strong>{{ checkin.painLevel }}/10</strong></div><div class="summary-stat">Temperatura<strong>{{ checkin.temperature }}°C</strong></div><div class="summary-stat">Mobilidade<strong>{{ checkin.mobilityScore.replace('_', ' ') }}</strong></div><div class="summary-stat">Foto<strong>{{ checkin.photoUploaded ? 'Enviada' : 'Sem foto' }}</strong></div></div>}
+        <button type="button" (click)="activeTab.set('checkin')" class="w-full py-3 bg-[#134E4A] text-white text-sm font-bold rounded-2xl">{{ todayCheckIn() ? 'Fazer novo registro' : 'Fazer check-in agora' }}</button>
+      </section>
+
+      <div class="grid md:grid-cols-2 gap-4">
+        <section class="content-card"><div class="flex justify-between"><h2 class="font-bold">Remédios de hoje</h2><span class="text-xs font-bold text-[#134E4A]">{{ patient.medicationAdherencePercent }}%</span></div><div class="space-y-2 my-4">@for (med of patient.medications.slice(0, 2); track med.id) {<div class="p-3 bg-[#F8FAFC] rounded-xl text-xs"><strong>{{ med.name }} · {{ med.dose }}</strong><span class="block text-[#718096]">{{ med.times.join(', ') }}</span></div>}</div><button type="button" (click)="activeTab.set('medications')" class="secondary-action">Ver e marcar medicamentos</button></section>
+        <section class="content-card"><div class="flex justify-between"><h2 class="font-bold">Sua ferida cirúrgica</h2><span class="text-xs font-bold text-[#134E4A]">{{ lastPhoto().reviewStatus === 'avaliado_adequado' ? 'Avaliada' : 'Em análise' }}</span></div>@if (lastPhoto(); as photo) {<div class="flex gap-3 my-4"><img [src]="photo.imageUrl" alt="Última foto" class="w-20 h-20 rounded-xl object-cover" /><p class="text-xs text-[#718096]"><strong class="block text-[#2D3748]">Foto {{ photo.dayLabel }}</strong>{{ photo.reviewFeedback || 'Aguardando parecer da equipe.' }}</p></div>}<button type="button" (click)="activeTab.set('checkin')" class="secondary-action">Enviar nova foto</button></section>
+      </div>
+
+      <button type="button" (click)="activeTab.set('care')" class="w-full p-5 bg-[#E6F4F1] border border-[#A7F3D0] rounded-3xl text-left"><strong class="text-[#134E4A]">Recomendações para o {{ patient.postOpDay }}º dia</strong><p class="text-xs text-[#718096]">Banho, alimentação, atividade e sinais de alerta.</p></button>
+      <section class="p-5 bg-white rounded-3xl border border-[#FF7F66]/40 border-l-4 border-l-[#FF7F66] flex flex-col sm:flex-row justify-between gap-3"><div><strong class="text-xs uppercase text-[#C2412D]">Plantão de emergência 24h</strong><p class="text-xs text-[#718096]">Em caso de falta de ar, sangramento ou dor súbita intensa, procure atendimento.</p></div><a href="tel:11984521920" class="px-5 py-2.5 bg-[#FF7F66] text-white text-xs font-bold rounded-2xl text-center">Ligar para o plantão</a></section>
+    }
+    </div>
+
+    <div ngTabPanel value="checkin">
+    @if (activeTab() === 'checkin') {
+      @if (checkInSaved()) {
+        <section class="content-card text-center py-10"><div class="w-16 h-16 mx-auto rounded-3xl bg-[#D1FAE5] text-[#134E4A] grid place-items-center text-2xl">✓</div><h2 class="text-2xl font-bold mt-4">Check-in registrado!</h2><p class="text-sm text-[#718096] mt-2">Os dados foram adicionados ao acompanhamento da equipe.</p>@if (painLevel >= 7 || temperature >= 37.8) {<p class="mt-4 p-4 bg-[#FFE5E0] text-[#C2412D] rounded-2xl text-xs font-bold">Um alerta prioritário foi gerado para a equipe.</p>}<button type="button" (click)="finishCheckIn()" class="mt-5 px-7 py-3 bg-[#134E4A] text-white rounded-2xl text-xs font-bold">Voltar ao início</button></section>
+      } @else {
+        <section class="content-card space-y-6"><div><span class="text-xs font-bold text-[#134E4A] bg-[#D1FAE5] px-3 py-1 rounded-full">Check-in diário · D+{{ patient.postOpDay }}</span><h2 class="text-2xl font-bold mt-3">Como você está se sentindo?</h2><p class="text-sm text-[#718096]">Leva cerca de dois minutos.</p></div>
+          <form (ngSubmit)="submitCheckIn()" class="space-y-5">
+            <fieldset class="form-section"><legend>1. Nível de dor: {{ painLevel }}/10</legend><input name="pain" type="range" min="0" max="10" [(ngModel)]="painLevel" class="w-full accent-[#134E4A]" /><div class="grid grid-cols-6 sm:grid-cols-11 gap-1">@for (value of [0,1,2,3,4,5,6,7,8,9,10]; track value) {<button type="button" (click)="painLevel = value" class="p-2 bg-white border border-[#E2E8F0] rounded-lg text-xs" [class.selected-number]="painLevel === value">{{ value }}</button>}</div></fieldset>
+            <fieldset class="form-section"><legend>2. Temperatura corporal</legend><div class="flex items-center gap-3"><button type="button" (click)="changeTemperature(-0.1)" class="temperature-button">−</button><strong class="text-xl">{{ temperature.toFixed(1) }}°C</strong><button type="button" (click)="changeTemperature(0.1)" class="temperature-button">+</button><span class="text-xs font-bold" [class.text-[#C2412D]]="temperature >= 37.8">{{ temperature >= 37.8 ? 'Febre detectada' : temperature >= 37.3 ? 'Temperatura elevada' : 'Temperatura normal' }}</span></div></fieldset>
+            <fieldset class="form-section"><legend>3. Mobilidade hoje</legend><div class="grid sm:grid-cols-2 gap-2"><label class="choice-label"><input type="radio" name="mobility" value="repouso_absoluto" [(ngModel)]="mobilityScore" /> Repouso absoluto</label><label class="choice-label"><input type="radio" name="mobility" value="caminha_pouco" [(ngModel)]="mobilityScore" /> Caminhei pouco</label><label class="choice-label"><input type="radio" name="mobility" value="caminha_bem" [(ngModel)]="mobilityScore" /> Caminhei bem</label><label class="choice-label"><input type="radio" name="mobility" value="plena" [(ngModel)]="mobilityScore" /> Boa disposição</label></div></fieldset>
+            <fieldset class="form-section"><legend>4. Sintomas ou desconfortos</legend><div class="grid sm:grid-cols-2 gap-2">@for (symptom of availableSymptoms; track symptom) {<button type="button" (click)="toggleSymptom(symptom)" class="choice-label text-left" [class.selected-choice]="symptoms().includes(symptom)">{{ symptoms().includes(symptom) ? '✓ ' : '' }}{{ symptom }}</button>}</div></fieldset>
+            <fieldset class="form-section">
+              <legend>5. Foto da incisão (opcional)</legend>
+              <input #photoInput type="file" accept="image/jpeg,image/png,image/webp" capture="environment" (change)="selectPhoto($event)" class="sr-only" />
+              @if (!photoUrl()) {
+                <button type="button" (click)="photoInput.click()" [disabled]="processingPhoto()" class="w-full p-5 bg-white border-2 border-dashed border-[#A7F3D0] rounded-2xl text-xs font-bold text-[#134E4A] disabled:opacity-60">
+                  {{ processingPhoto() ? 'Processando foto...' : 'Fotografar ou escolher da galeria' }}
+                </button>
+                <p class="mt-2 text-[10px] text-[#718096] text-center">JPEG, PNG ou WebP · máximo de 8 MB</p>
+              } @else {
+                <img [src]="photoUrl()" alt="Prévia da foto selecionada" class="w-full max-h-60 object-contain bg-black rounded-2xl" />
+                <div class="mt-2 flex items-center justify-between gap-2">
+                  <span class="text-[10px] text-[#718096] truncate">{{ photoName() }}</span>
+                  <div class="flex gap-2">
+                    <button type="button" (click)="photoInput.click()" class="px-3 py-1.5 bg-white border rounded-xl text-[10px] font-bold text-[#134E4A]">Trocar</button>
+                    <button type="button" (click)="removePhoto()" class="px-3 py-1.5 bg-[#FFF1F2] rounded-xl text-[10px] font-bold text-[#BE123C]">Remover</button>
+                  </div>
+                </div>
+                <input name="photoNotes" [(ngModel)]="photoNotes" placeholder="Observação sobre a foto" class="w-full mt-2 px-3 py-2 bg-white border rounded-xl text-xs" />
+              }
+              @if (photoError()) {<p role="alert" class="mt-2 text-xs font-bold text-[#BE123C]">{{ photoError() }}</p>}
+            </fieldset>
+            <fieldset class="form-section"><legend>6. Recado para a equipe</legend><textarea name="notes" [(ngModel)]="notes" rows="3" class="w-full p-3 bg-white border border-[#E2E8F0] rounded-xl text-sm" placeholder="Conte qualquer dúvida ou sensação..."></textarea></fieldset>
+            <button class="w-full py-4 bg-[#134E4A] text-white text-sm font-bold rounded-2xl">Concluir e enviar check-in</button>
+          </form>
+        </section>
+      }
+    }
+    </div>
+
+    <div ngTabPanel value="medications">
+    @if (activeTab() === 'medications') {<section class="space-y-4"><header class="patient-banner"><span class="text-xs font-bold text-[#D1FAE5]">Prescrição ativa</span><h2 class="text-2xl font-bold">Minha medicação do dia</h2><p class="text-sm text-teal-100">Confirme cada dose tomada nos horários prescritos.</p></header>@for (med of patient.medications; track med.id) {<article class="content-card"><div class="flex justify-between gap-3"><div><h3 class="font-bold">{{ med.name }} · {{ med.dose }}</h3><p class="text-xs font-bold text-[#134E4A]">{{ med.purpose }}</p></div><span class="text-xs text-[#718096]">{{ med.frequency }}</span></div><p class="text-xs text-[#718096] my-3">{{ med.instructions }}</p><div class="grid grid-cols-2 sm:grid-cols-4 gap-2">@for (time of med.times; track time) {<button type="button" (click)="vivace.toggleMedicationTaken(patient.id, med.id, time)" class="p-3 rounded-2xl border text-xs font-bold text-left" [class.selected-dose]="med.takenToday[time]">{{ time }} · {{ med.takenToday[time] ? 'Tomado' : 'Confirmar' }}</button>}</div></article>}<div class="p-4 bg-[#FEF3C7] rounded-3xl text-xs text-[#92400E]"><strong>Nunca interrompa antibióticos ou anticoagulantes sem orientação médica.</strong></div></section>}
+    </div>
+
+    <div ngTabPanel value="care">
+    @if (activeTab() === 'care') {<section class="space-y-4"><header class="patient-banner"><span class="text-xs font-bold text-[#D1FAE5]">Guia de cuidados domiciliares</span><h2 class="text-2xl font-bold">Orientações para sua recuperação</h2></header><div class="p-5 bg-[#FFE5E0] border border-[#FF7F66] rounded-3xl"><h3 class="font-bold text-[#C2412D]">Sinais de alerta</h3><ul class="text-xs mt-2 list-disc list-inside space-y-1"><li>Febre igual ou superior a 37,8°C</li><li>Dor intensa que não melhora com a medicação</li><li>Secreção, sangramento ou vermelhidão crescente</li><li>Falta de ar, vômitos persistentes ou inchaço em uma perna</li></ul></div><div class="grid md:grid-cols-2 gap-4">@for (instruction of patient.instructions; track instruction.id) {<article class="content-card"><h3 class="font-bold">{{ instruction.title }}</h3><p class="text-xs text-[#718096] mt-2">{{ instruction.content }}</p></article>}</div><div class="content-card"><h3 class="font-bold mb-3">Dúvidas frequentes</h3><div ngAccordionGroup [multiExpandable]="false" class="space-y-2">@for (faq of faqs; track faq.question; let index = $index) {<article class="border border-[#E2E8F0] rounded-2xl overflow-hidden"><h4><button ngAccordionTrigger [panel]="faqPanel" #faqTrigger="ngAccordionTrigger" [expanded]="index === 0" type="button" class="w-full p-4 bg-[#F8FAFC] text-left text-xs font-bold flex items-center justify-between gap-3"><span>{{ faq.question }}</span><span aria-hidden="true" class="text-lg text-[#134E4A]">{{ faqTrigger.expanded() ? '−' : '+' }}</span></button></h4><div ngAccordionPanel #faqPanel="ngAccordionPanel"><ng-template ngAccordionContent><p class="p-4 text-xs text-[#718096] border-t border-[#E2E8F0]">{{ faq.answer }}</p></ng-template></div></article>}</div></div></section>}
+    </div>
+
+    <div ngTabPanel value="messages">
+    @if (activeTab() === 'messages') {<section class="content-card p-0 overflow-hidden"><header class="patient-banner rounded-none"><h2 class="font-bold">{{ vivace.professionalUser().name }}</h2><p class="text-xs text-teal-100">Equipe de cirurgia · Canal de acompanhamento</p></header><div class="p-4 bg-[#F8FAFC] flex gap-2 overflow-x-auto">@for (question of ['É normal sentir ardor?', 'Posso dormir de lado?', 'Quando será meu retorno?']; track question) {<button type="button" (click)="sendMessage(question)" class="shrink-0 px-3 py-1.5 bg-white border rounded-xl text-[11px]">{{ question }}</button>}</div><div class="h-96 overflow-y-auto p-5 space-y-3">@for (messageItem of patient.messages; track messageItem.id) {<div class="flex" [class.justify-end]="messageItem.sender === 'paciente'"><div class="max-w-md p-3 rounded-2xl text-xs" [class.bg-[#134E4A]]="messageItem.sender === 'paciente'" [class.text-white]="messageItem.sender === 'paciente'" [class.bg-[#F1F5F9]]="messageItem.sender === 'equipe'"><small class="block opacity-70">{{ messageItem.sender === 'paciente' ? 'Você' : messageItem.senderName }} · {{ messageItem.timestamp }}</small>{{ messageItem.text }}</div></div>}</div><form (ngSubmit)="sendMessage()" class="p-3 border-t flex gap-2"><input name="message" [(ngModel)]="message" class="flex-1 px-4 py-3 bg-[#F8FAFC] border rounded-2xl text-sm" placeholder="Digite sua mensagem..." /><button class="px-5 bg-[#134E4A] text-white rounded-2xl text-xs font-bold">Enviar</button></form></section>}
+    </div>
+  </div>
+}
