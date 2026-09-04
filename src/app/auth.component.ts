@@ -41,7 +41,11 @@ export class AuthComponent {
   login(event: Event): void {
     event.preventDefault();
     void submit(this.loginForm, async () => {
-      this.vivace.loginAs(this.tab(), this.tab() === 'patient' ? 'pat-1' : undefined);
+      this.vivace.loginAs(
+        this.tab(),
+        this.tab() === 'patient' ? 'pat-1' : undefined,
+        this.loginModel().rememberMe
+      );
     });
   }
 }

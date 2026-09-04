@@ -10,7 +10,7 @@ Plataforma Angular para acompanhamento pós-operatório, com experiências separ
 - Highcharts Angular para evolução de dor e temperatura
 - TypeScript em modo estrito
 - Tailwind CSS 4
-- Persistência demonstrativa em `localStorage`
+- Persistência demonstrativa compartilhada na rede local, com contingência em `localStorage`
 
 ## Funcionalidades
 
@@ -28,7 +28,9 @@ npm install
 npm run dev
 ```
 
-A aplicação estará disponível em `http://localhost:3000`.
+A aplicação estará disponível em `http://localhost:3000`. Outros dispositivos na mesma rede podem acessar pelo IP do computador, por exemplo `http://192.168.0.4:3000`.
+
+O comando também inicia a API de persistência na porta `3001`. Os dados compartilhados ficam em `.data/` no computador que executa a aplicação.
 
 ## Validar
 

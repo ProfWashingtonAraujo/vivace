@@ -1,5 +1,4 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { AccordionContent, AccordionGroup, AccordionPanel, AccordionTrigger } from '@angular/aria/accordion';
 import { Tab, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
 import { FormsModule } from '@angular/forms';
 import { DailyCheckIn } from '../types';
@@ -15,11 +14,7 @@ type PatientTab = 'summary' | 'checkin' | 'medications' | 'care' | 'messages';
     Tabs,
     TabList,
     Tab,
-    TabPanel,
-    AccordionGroup,
-    AccordionTrigger,
-    AccordionPanel,
-    AccordionContent
+    TabPanel
   ],
   templateUrl: './patient-portal.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
@@ -35,7 +30,7 @@ export class PatientPortalComponent {
   readonly processingPhoto = signal(false);
   readonly patient = this.vivace.selectedPatient;
   readonly todayCheckIn = computed(() => this.patient()?.checkIns[0]);
-  readonly lastPhoto = computed(() => this.patient()?.woundPhotos[0]);
+  readonly lastPhoto = computed(() => this.patient()?.woundPhotos.find(photo => !photo.imageUrl.includes('images.unsplash.com')));
 
   painLevel = this.patient()?.currentPain ?? 3;
   temperature = this.patient()?.currentTemp ?? 36.7;
@@ -49,13 +44,6 @@ export class PatientPortalComponent {
     'Ardor no local da cirurgia', 'Gases ou estômago cheio', 'Dor no ombro ou costas',
     'Náusea ou falta de apetite', 'Inchaço moderado', 'Tontura ao levantar',
     'Intestino preso', 'Sensação de cansaço'
-  ];
-
-  readonly faqs = [
-    { question: 'É normal sentir repuxamento ou leve ardor nas incisões?', answer: 'Pode ocorrer nos primeiros dias. Avise a equipe se houver vermelhidão crescente, secreção, calor local ou piora importante da dor.' },
-    { question: 'Como aliviar o desconforto de gases no ombro ou tórax?', answer: 'Pequenas caminhadas dentro de casa e a medicação prescrita podem ajudar. Procure atendimento se houver falta de ar ou dor intensa.' },
-    { question: 'Posso tomar banho e molhar os curativos?', answer: 'Siga a orientação específica da sua equipe. Use água corrente e sabonete neutro, sem esfregar, e seque com toques suaves.' },
-    { question: 'Quando posso dirigir e fazer exercícios?', answer: 'A liberação depende do procedimento e da evolução. Confirme com sua equipe no retorno antes de retomar essas atividades.' }
   ];
 
   toggleSymptom(symptom: string): void {

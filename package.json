@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "ng serve --port 3000 --host 0.0.0.0",
-    "start": "ng serve --port 3000 --host 0.0.0.0",
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
     "build": "ng build",
     "preview": "ng serve --configuration production --port 3000",
     "lint": "ng build --configuration development"

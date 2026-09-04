@@ -8,7 +8,7 @@
       <button ngTab value="messages" type="button" class="patient-tab">Falar com a equipe</button>
     </nav>
 
-    <div ngTabPanel value="summary">
+    <div ngTabPanel value="summary" class="space-y-4">
     @if (activeTab() === 'summary') {
       <section class="bg-gradient-to-br from-[#134E4A] via-[#10433F] to-[#0A2D2A] rounded-3xl p-6 sm:p-7 text-white shadow-md relative overflow-hidden">
         <div class="absolute -top-16 -right-16 w-56 h-56 bg-[#D1FAE5]/15 rounded-full blur-2xl"></div>
@@ -23,7 +23,7 @@
 
       <div class="grid md:grid-cols-2 gap-4">
         <section class="content-card"><div class="flex justify-between"><h2 class="font-bold">Remédios de hoje</h2><span class="text-xs font-bold text-[#134E4A]">{{ patient.medicationAdherencePercent }}%</span></div><div class="space-y-2 my-4">@for (med of patient.medications.slice(0, 2); track med.id) {<div class="p-3 bg-[#F8FAFC] rounded-xl text-xs"><strong>{{ med.name }} · {{ med.dose }}</strong><span class="block text-[#718096]">{{ med.times.join(', ') }}</span></div>}</div><button type="button" (click)="activeTab.set('medications')" class="secondary-action">Ver e marcar medicamentos</button></section>
-        <section class="content-card"><div class="flex justify-between"><h2 class="font-bold">Sua ferida cirúrgica</h2><span class="text-xs font-bold text-[#134E4A]">{{ lastPhoto().reviewStatus === 'avaliado_adequado' ? 'Avaliada' : 'Em análise' }}</span></div>@if (lastPhoto(); as photo) {<div class="flex gap-3 my-4"><img [src]="photo.imageUrl" alt="Última foto" class="w-20 h-20 rounded-xl object-cover" /><p class="text-xs text-[#718096]"><strong class="block text-[#2D3748]">Foto {{ photo.dayLabel }}</strong>{{ photo.reviewFeedback || 'Aguardando parecer da equipe.' }}</p></div>}<button type="button" (click)="activeTab.set('checkin')" class="secondary-action">Enviar nova foto</button></section>
+        <section class="content-card"><div class="flex justify-between"><h2 class="font-bold">Sua ferida cirúrgica</h2>@if (lastPhoto(); as photo) {<span class="text-xs font-bold text-[#134E4A]">{{ photo.reviewStatus === 'avaliado_adequado' ? 'Avaliada' : 'Em análise' }}</span>}</div>@if (lastPhoto(); as photo) {<div class="flex gap-3 my-4"><img [src]="photo.imageUrl" alt="Última foto" class="w-20 h-20 rounded-xl object-cover" /><p class="text-xs text-[#718096]"><strong class="block text-[#2D3748]">Foto {{ photo.dayLabel }}</strong>{{ photo.reviewFeedback || 'Aguardando parecer da equipe.' }}</p></div>} @else {<p class="my-4 text-xs text-[#718096]">Nenhuma foto enviada até o momento.</p>}<button type="button" (click)="activeTab.set('checkin')" class="secondary-action">Enviar nova foto</button></section>
       </div>
 
       <button type="button" (click)="activeTab.set('care')" class="w-full p-5 bg-[#E6F4F1] border border-[#A7F3D0] rounded-3xl text-left"><strong class="text-[#134E4A]">Recomendações para o {{ patient.postOpDay }}º dia</strong><p class="text-xs text-[#718096]">Banho, alimentação, atividade e sinais de alerta.</p></button>
@@ -76,7 +76,21 @@
     </div>
 
     <div ngTabPanel value="care">
-    @if (activeTab() === 'care') {<section class="space-y-4"><header class="patient-banner"><span class="text-xs font-bold text-[#D1FAE5]">Guia de cuidados domiciliares</span><h2 class="text-2xl font-bold">Orientações para sua recuperação</h2></header><div class="p-5 bg-[#FFE5E0] border border-[#FF7F66] rounded-3xl"><h3 class="font-bold text-[#C2412D]">Sinais de alerta</h3><ul class="text-xs mt-2 list-disc list-inside space-y-1"><li>Febre igual ou superior a 37,8°C</li><li>Dor intensa que não melhora com a medicação</li><li>Secreção, sangramento ou vermelhidão crescente</li><li>Falta de ar, vômitos persistentes ou inchaço em uma perna</li></ul></div><div class="grid md:grid-cols-2 gap-4">@for (instruction of patient.instructions; track instruction.id) {<article class="content-card"><h3 class="font-bold">{{ instruction.title }}</h3><p class="text-xs text-[#718096] mt-2">{{ instruction.content }}</p></article>}</div><div class="content-card"><h3 class="font-bold mb-3">Dúvidas frequentes</h3><div ngAccordionGroup [multiExpandable]="false" class="space-y-2">@for (faq of faqs; track faq.question; let index = $index) {<article class="border border-[#E2E8F0] rounded-2xl overflow-hidden"><h4><button ngAccordionTrigger [panel]="faqPanel" #faqTrigger="ngAccordionTrigger" [expanded]="index === 0" type="button" class="w-full p-4 bg-[#F8FAFC] text-left text-xs font-bold flex items-center justify-between gap-3"><span>{{ faq.question }}</span><span aria-hidden="true" class="text-lg text-[#134E4A]">{{ faqTrigger.expanded() ? '−' : '+' }}</span></button></h4><div ngAccordionPanel #faqPanel="ngAccordionPanel"><ng-template ngAccordionContent><p class="p-4 text-xs text-[#718096] border-t border-[#E2E8F0]">{{ faq.answer }}</p></ng-template></div></article>}</div></div></section>}
+    @if (activeTab() === 'care') {
+      <section class="space-y-4">
+        <header class="patient-banner"><span class="text-xs font-bold text-[#D1FAE5]">Guia de cuidados domiciliares</span><h2 class="text-2xl font-bold">Orientações para sua recuperação</h2><p class="text-sm text-teal-100 mt-1">Recomendações definidas pela sua equipe para o seu pós-operatório.</p></header>
+        <div class="grid md:grid-cols-2 gap-4">
+          @for (instruction of patient.instructions; track instruction.id) {
+            <article class="content-card" [class.md:col-span-2]="instruction.important" [class.bg-[#FFF1F2]]="instruction.important" [class.border-[#FF7F66]]="instruction.important">
+              <span class="text-[10px] font-bold uppercase tracking-wider" [class.text-[#C2412D]]="instruction.important" [class.text-[#134E4A]]="!instruction.important">{{ instruction.category.replace('_', ' ') }}</span>
+              <h3 class="font-bold mt-1" [class.text-[#C2412D]]="instruction.important">{{ instruction.title }}</h3><p class="text-xs text-[#718096] mt-2">{{ instruction.content }}</p>
+            </article>
+          } @empty {
+            <div class="md:col-span-2 content-card text-center py-10"><h3 class="font-bold">Nenhuma orientação disponível</h3><p class="text-xs text-[#718096] mt-1">Sua equipe ainda não cadastrou cuidados específicos para esta etapa.</p></div>
+          }
+        </div>
+      </section>
+    }
     </div>
 
     <div ngTabPanel value="messages">
