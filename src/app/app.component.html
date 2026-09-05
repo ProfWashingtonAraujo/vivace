@@ -5,9 +5,8 @@
     <header class="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#E2E8F0] shadow-sm">
       <div class="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 min-h-16 sm:min-h-[72px] flex items-center justify-between gap-3">
         <div class="flex items-center gap-3 sm:gap-5">
-          <button type="button" (click)="viewingRecordId.set(null)" class="flex items-center gap-2 text-left">
-            <span class="w-9 h-9 rounded-xl bg-[#134E4A] text-white grid place-items-center font-bold">V</span>
-            <span class="hidden sm:block"><strong class="block tracking-[0.14em] text-[#134E4A]">VIVACE</strong><small class="block text-[9px] text-[#718096] uppercase">Pós-operatório</small></span>
+          <button type="button" (click)="viewingRecordId.set(null)" class="flex items-center">
+            <img src="logo.png" alt="VIVACE Logo" class="h-16 w-auto object-contain" />
           </button>
           <span class="px-3 py-1.5 rounded-xl bg-[#E6F4F1] border border-[#D1FAE5] text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-[#134E4A]">{{ vivace.currentRole() === 'professional' ? 'Painel profissional' : vivace.currentRole() === 'patient' ? 'Portal do paciente' : 'Painel de cadastros' }}</span>
         </div>

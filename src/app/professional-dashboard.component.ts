@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal, output } 
 import { FormsModule } from '@angular/forms';
 import { AlertSeverity, Patient } from '../types';
 import { VivaceService } from './vivace.service';
+import { PatientManagementComponent } from './patient-management.component';
 
 type StatusFilter = 'todos' | AlertSeverity | 'pendente_foto';
 type DayFilter = 'todos' | 'd0_d3' | 'd4_d7' | 'd8_plus';
@@ -9,7 +10,7 @@ type DayFilter = 'todos' | 'd0_d3' | 'd4_d7' | 'd8_plus';
 @Component({
   selector: 'vivace-professional-dashboard',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, PatientManagementComponent],
   templateUrl: './professional-dashboard.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
@@ -19,6 +20,7 @@ export class ProfessionalDashboardComponent {
   readonly searchQuery = signal('');
   readonly statusFilter = signal<StatusFilter>('todos');
   readonly dayFilter = signal<DayFilter>('todos');
+  readonly managingPatients = signal(false);
 
   readonly criticalPatients = computed(() => this.vivace.patients().filter(patient => patient.status === 'critico'));
   readonly criticalCount = computed(() => this.criticalPatients().length);

@@ -28,6 +28,10 @@ export class PatientPortalComponent {
   readonly photoName = signal('');
   readonly photoError = signal('');
   readonly processingPhoto = signal(false);
+  readonly savingCheckIn = signal(false);
+  readonly checkInPendingSync = signal(false);
+  readonly sendingMessage = signal(false);
+  readonly messageError = signal('');
   readonly patient = this.vivace.selectedPatient;
   readonly todayCheckIn = computed(() => this.patient()?.checkIns[0]);
   readonly lastPhoto = computed(() => this.patient()?.woundPhotos.find(photo => !photo.imageUrl.includes('images.unsplash.com')));
@@ -87,11 +91,18 @@ export class PatientPortalComponent {
     this.photoError.set('');
   }
 
-  submitCheckIn(): void {
+  async submitCheckIn(): Promise<void> {
     const patient = this.patient();
-    if (!patient) return;
-    if (this.photoUrl()) this.vivace.uploadWoundPhoto(patient.id, this.photoUrl(), this.photoNotes || this.notes);
-    this.vivace.submitDailyCheckIn(patient.id, {
+    if (!patient || this.savingCheckIn()) return;
+    this.savingCheckIn.set(true);
+    this.photoError.set('');
+    if (this.checkInPendingSync()) {
+      const saved = await this.vivace.syncPendingChanges();
+      this.finishSavingCheckIn(saved);
+      return;
+    }
+    if (this.photoUrl()) void this.vivace.uploadWoundPhoto(patient.id, this.photoUrl(), this.photoNotes || this.notes);
+    const saved = await this.vivace.submitDailyCheckIn(patient.id, {
       date: new Date().toLocaleDateString('pt-BR'),
       dayLabel: `D+${patient.postOpDay}`,
       painLevel: this.painLevel,
@@ -102,6 +113,17 @@ export class PatientPortalComponent {
       mood: this.mood,
       photoUploaded: Boolean(this.photoUrl())
     });
+    this.finishSavingCheckIn(saved);
+  }
+
+  private finishSavingCheckIn(saved: boolean): void {
+    this.savingCheckIn.set(false);
+    if (!saved) {
+      this.checkInPendingSync.set(true);
+      this.photoError.set('O check-in ficou salvo neste dispositivo, mas ainda não foi sincronizado. O sistema tentará novamente automaticamente.');
+      return;
+    }
+    this.checkInPendingSync.set(false);
     this.photoUrl.set('');
     this.photoName.set('');
     this.photoNotes = '';
@@ -113,11 +135,15 @@ export class PatientPortalComponent {
     this.activeTab.set('summary');
   }
 
-  sendMessage(text = this.message): void {
+  async sendMessage(text = this.message): Promise<void> {
     const patient = this.patient();
-    if (!patient || !text.trim()) return;
-    this.vivace.sendMessage(patient.id, text, 'paciente');
-    this.message = '';
+    if (!patient || !text.trim() || this.sendingMessage()) return;
+    this.sendingMessage.set(true);
+    this.messageError.set('');
+    const saved = await this.vivace.sendMessage(patient.id, text, 'paciente');
+    this.sendingMessage.set(false);
+    if (saved) this.message = '';
+    else this.messageError.set('Não foi possível enviar. Verifique a conexão e tente novamente.');
   }
 
   private compressPhoto(file: File): Promise<string> {

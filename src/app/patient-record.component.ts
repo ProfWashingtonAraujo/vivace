@@ -46,6 +46,8 @@ export class PatientRecordComponent {
   readonly showInstructionForm = signal(false);
   readonly editingInstructionId = signal<string | null>(null);
   readonly instructionMessage = signal('');
+  readonly sendingChat = signal(false);
+  readonly chatError = signal('');
   medicationModel = this.emptyMedication();
   medicationTime = '08:00';
   instructionModel = this.emptyInstruction();
@@ -244,9 +246,14 @@ export class PatientRecordComponent {
     this.instructionModel = this.emptyInstruction();
   }
 
-  sendChat(): void {
-    this.vivace.sendMessage(this.patient().id, this.chatMessage, 'equipe');
-    this.chatMessage = '';
+  async sendChat(): Promise<void> {
+    if (!this.chatMessage.trim() || this.sendingChat()) return;
+    this.sendingChat.set(true);
+    this.chatError.set('');
+    const saved = await this.vivace.sendMessage(this.patient().id, this.chatMessage, 'equipe');
+    this.sendingChat.set(false);
+    if (saved) this.chatMessage = '';
+    else this.chatError.set('Não foi possível enviar. Verifique a conexão e tente novamente.');
   }
 
   addNote(): void {

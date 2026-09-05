@@ -10,12 +10,17 @@
           {{ criticalCount() ? criticalCount() + ' paciente(s) requer(em) atenção imediata.' : 'Todos evoluem com estabilidade.' }}
         </p>
       </div>
-      <div class="flex gap-3">
+      <div class="flex flex-wrap gap-3">
+        <button type="button" (click)="managingPatients.set(!managingPatients())" class="px-5 py-3 bg-white text-[#134E4A] rounded-2xl text-xs font-bold shadow-sm">{{ managingPatients() ? '← Voltar ao painel geral' : 'Gerenciar pacientes' }}</button>
         <div class="bg-white/10 rounded-2xl p-4 border border-white/15 text-center min-w-28"><strong class="block text-2xl">{{ vivace.patients().length }}</strong><span class="text-[10px] uppercase text-[#D1FAE5]">Pacientes ativos</span></div>
         <div class="bg-[#FF7F66]/25 rounded-2xl p-4 border border-[#FF7F66]/40 text-center min-w-28"><strong class="block text-2xl">{{ criticalCount() }}</strong><span class="text-[10px] uppercase text-[#FFE5E0]">Alertas críticos</span></div>
       </div>
     </div>
   </section>
+
+  @if (managingPatients()) {
+    <vivace-patient-management />
+  } @else {
 
   @if (criticalPatients()[0]; as critical) {
     <section class="bg-white border border-[#FF7F66]/40 border-l-4 border-l-[#FF7F66] rounded-3xl p-5 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -78,4 +83,5 @@
       }
     </div>
   </section>
+  }
 </div>

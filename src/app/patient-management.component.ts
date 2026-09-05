@@ -1,80 +1,92 @@
 import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
 import { form, FormField, required, submit } from '@angular/forms/signals';
-import { ProfessionalUser } from '../types';
+import { Patient } from '../types';
 import { VivaceService } from './vivace.service';
 
-interface ProfessionalFormModel {
+interface PatientFormModel {
   name: string;
+  age: number;
+  gender: string;
   email: string;
-  crmCoren: string;
-  specialty: string;
-  role: string;
+  phone: string;
+  cpf: string;
+  procedure: string;
+  surgeryDate: string;
+  dischargeDate: string;
+  hospital: string;
   password: string;
   passwordConfirmation: string;
 }
 
 @Component({
-  selector: 'vivace-admin-dashboard',
+  selector: 'vivace-patient-management',
   standalone: true,
   imports: [FormField],
-  templateUrl: './admin-dashboard.component.html',
+  templateUrl: './patient-management.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush
 })
-export class AdminDashboardComponent {
+export class PatientManagementComponent {
   readonly vivace = inject(VivaceService);
   readonly feedbackMessage = signal('');
   readonly feedbackError = signal(false);
-  readonly editingProfessionalId = signal<string | null>(null);
-  readonly professionalAvatar = signal('');
+  readonly editingPatientId = signal<string | null>(null);
+  readonly patientAvatar = signal('');
   readonly processingAvatar = signal(false);
   readonly avatarError = signal('');
-  readonly professionalModel = signal<ProfessionalFormModel>(this.emptyProfessional());
-  readonly professionalForm = form(this.professionalModel, path => {
+  readonly patientModel = signal<PatientFormModel>(this.emptyPatient());
+  readonly patientForm = form(this.patientModel, path => {
     required(path.name);
+    required(path.age);
+    required(path.gender);
     required(path.email);
-    required(path.crmCoren);
-    required(path.specialty);
-    required(path.role);
+    required(path.phone);
+    required(path.cpf);
+    required(path.procedure);
+    required(path.surgeryDate);
+    required(path.dischargeDate);
+    required(path.hospital);
   });
 
-  saveProfessional(event: Event): void {
+  savePatient(event: Event): void {
     event.preventDefault();
     if (!this.validatePassword()) return;
-    void submit(this.professionalForm, async () => {
-      const { passwordConfirmation: _, ...professional } = this.professionalModel();
-      const editingId = this.editingProfessionalId();
+    void submit(this.patientForm, async () => {
+      const editingId = this.editingPatientId();
+      const { passwordConfirmation: _, ...patient } = this.patientModel();
       const saved = editingId
-        ? await this.vivace.updateProfessional(editingId, professional, this.professionalAvatar())
-        : await this.vivace.addProfessional({
-          ...professional,
-          avatar: this.professionalAvatar() || `https://ui-avatars.com/api/?name=${encodeURIComponent(professional.name)}&background=134E4A&color=ffffff`
-        });
-      this.cancelProfessionalEdit();
+        ? await this.vivace.updatePatientRegistration(editingId, patient, this.patientAvatar())
+        : await this.vivace.addPatient(patient, this.patientAvatar());
+      this.cancelPatientEdit();
       this.showFeedback(saved
-        ? editingId ? 'Profissional atualizado com sucesso.' : 'Profissional cadastrado com sucesso.'
+        ? editingId ? 'Paciente atualizado com sucesso.' : 'Paciente cadastrado com sucesso.'
         : 'Cadastro salvo neste dispositivo e aguardando sincronização.', !saved);
     });
   }
 
-  editProfessional(professional: ProfessionalUser): void {
-    this.editingProfessionalId.set(professional.id);
-    this.professionalModel.set({
-      name: professional.name,
-      email: professional.email,
-      crmCoren: professional.crmCoren,
-      specialty: professional.specialty,
-      role: professional.role,
+  editPatient(patient: Patient): void {
+    this.editingPatientId.set(patient.id);
+    this.patientModel.set({
+      name: patient.name,
+      age: patient.age,
+      gender: patient.gender,
+      email: patient.email,
+      phone: patient.phone,
+      cpf: patient.cpf,
+      procedure: patient.procedure,
+      surgeryDate: patient.surgeryDate,
+      dischargeDate: patient.dischargeDate,
+      hospital: patient.hospital,
       password: '',
       passwordConfirmation: ''
     });
-    this.professionalAvatar.set(professional.avatar);
+    this.patientAvatar.set(patient.avatar);
     this.avatarError.set('');
   }
 
-  cancelProfessionalEdit(): void {
-    this.editingProfessionalId.set(null);
-    this.professionalModel.set(this.emptyProfessional());
-    this.professionalAvatar.set('');
+  cancelPatientEdit(): void {
+    this.editingPatientId.set(null);
+    this.patientModel.set(this.emptyPatient());
+    this.patientAvatar.set('');
     this.avatarError.set('');
   }
 
@@ -96,7 +108,7 @@ export class AdminDashboardComponent {
 
     this.processingAvatar.set(true);
     try {
-      this.professionalAvatar.set(await this.compressAvatar(file));
+      this.patientAvatar.set(await this.compressAvatar(file));
     } catch {
       this.avatarError.set('Não foi possível processar a foto. Tente outra imagem.');
     } finally {
@@ -104,19 +116,19 @@ export class AdminDashboardComponent {
     }
   }
 
-  deleteProfessional(professional: ProfessionalUser): void {
-    if (!window.confirm(`Excluir o cadastro de ${professional.name}?`)) return;
-    if (!this.vivace.deleteProfessional(professional.id)) {
-      this.showFeedback('Mantenha ao menos um profissional cadastrado.', true);
+  deletePatient(patient: Patient): void {
+    if (!window.confirm(`Excluir o cadastro de ${patient.name}?`)) return;
+    if (!this.vivace.deletePatient(patient.id)) {
+      this.showFeedback('Mantenha ao menos um paciente cadastrado.', true);
       return;
     }
-    if (this.editingProfessionalId() === professional.id) this.cancelProfessionalEdit();
-    this.showFeedback('Profissional excluído com sucesso.');
+    if (this.editingPatientId() === patient.id) this.cancelPatientEdit();
+    this.showFeedback('Paciente excluído com sucesso.');
   }
 
   private validatePassword(): boolean {
-    const model = this.professionalModel();
-    if (!this.editingProfessionalId() && !model.password) {
+    const model = this.patientModel();
+    if (!this.editingPatientId() && !model.password) {
       this.showFeedback('Informe uma senha para o novo cadastro.', true);
       return false;
     }
@@ -138,8 +150,11 @@ export class AdminDashboardComponent {
     window.setTimeout(() => this.feedbackMessage.set(''), 3000);
   }
 
-  private emptyProfessional(): ProfessionalFormModel {
-    return { name: '', email: '', crmCoren: '', specialty: '', role: '', password: '', passwordConfirmation: '' };
+  private emptyPatient(): PatientFormModel {
+    return {
+      name: '', age: 18, gender: '', email: '', phone: '', cpf: '', procedure: '',
+      surgeryDate: '', dischargeDate: '', hospital: '', password: '', passwordConfirmation: ''
+    };
   }
 
   private compressAvatar(file: File): Promise<string> {

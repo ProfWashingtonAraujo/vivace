@@ -5,6 +5,7 @@ import { AlertSeverity, ChatMessage, DailyCheckIn, MedicationItem, Patient, Post
 const STORAGE_KEY = 'vivace_patients_v2';
 const PROFESSIONALS_STORAGE_KEY = 'vivace_professionals_v1';
 const SESSION_STORAGE_KEY = 'vivace_session_v1';
+const SYNC_PENDING_STORAGE_KEY = 'vivace_sync_pending_v1';
 const SYNC_INTERVAL_MS = 3_000;
 
 interface StoredSession {
@@ -19,6 +20,8 @@ export class VivaceService {
   private readonly professionalsState = signal<ProfessionalUser[]>(this.loadProfessionals());
   private saveQueue = Promise.resolve();
   private pendingSaves = 0;
+  private stateRevision = 0;
+  private hasUnsavedChanges = this.loadSyncPending();
 
   readonly patients = this.patientsState.asReadonly();
   readonly professionals = this.professionalsState.asReadonly();
@@ -40,6 +43,7 @@ export class VivaceService {
       }
     });
     void this.loadSharedState();
+    this.listenForMessages();
     window.setInterval(() => void this.loadSharedState(false), SYNC_INTERVAL_MS);
     effect(() => {
       try {
@@ -67,6 +71,10 @@ export class VivaceService {
     }
   }
 
+  syncPendingChanges(): Promise<boolean> {
+    return this.saveSharedState();
+  }
+
   resetToDefaults(): void {
     this.patientsState.set(structuredClone(INITIAL_PATIENTS));
     this.professionalsState.set([structuredClone(CURRENT_PROFESSIONAL)]);
@@ -76,15 +84,15 @@ export class VivaceService {
     void this.saveSharedState();
   }
 
-  addProfessional(professional: Omit<ProfessionalUser, 'id'>): void {
+  addProfessional(professional: Omit<ProfessionalUser, 'id'>): Promise<boolean> {
     this.professionalsState.update(professionals => [
       ...professionals,
       { ...professional, id: `prof-${Date.now()}` }
     ]);
-    void this.saveSharedState();
+    return this.saveSharedState();
   }
 
-  updateProfessional(id: string, changes: Omit<ProfessionalUser, 'id' | 'avatar'>, avatar?: string): void {
+  updateProfessional(id: string, changes: Omit<ProfessionalUser, 'id' | 'avatar'>, avatar?: string): Promise<boolean> {
     const currentProfessional = this.professionals().find(professional => professional.id === id);
     this.professionalsState.update(professionals => professionals.map(professional =>
       professional.id === id ? {
@@ -102,7 +110,7 @@ export class VivaceService {
         ? { ...patient, surgeon: updatedSurgeon }
         : patient));
     }
-    void this.saveSharedState();
+    return this.saveSharedState();
   }
 
   deleteProfessional(id: string): boolean {
@@ -112,7 +120,7 @@ export class VivaceService {
     return true;
   }
 
-  addPatient(patient: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): void {
+  addPatient(patient: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): Promise<boolean> {
     const surgeryDate = new Date(`${patient.surgeryDate}T12:00:00`);
     const postOpDay = Number.isNaN(surgeryDate.getTime())
       ? 0
@@ -144,15 +152,15 @@ export class VivaceService {
       clinicalNotes: []
     };
     this.patientsState.update(patients => [...patients, newPatient]);
-    void this.saveSharedState();
+    return this.saveSharedState();
   }
 
-  updatePatientRegistration(id: string, changes: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): void {
+  updatePatientRegistration(id: string, changes: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): Promise<boolean> {
     const surgeryDate = new Date(`${changes.surgeryDate}T12:00:00`);
     const postOpDay = Number.isNaN(surgeryDate.getTime())
       ? 0
       : Math.max(0, Math.floor((Date.now() - surgeryDate.getTime()) / 86_400_000));
-    this.updatePatient(id, patient => ({
+    return this.updatePatient(id, patient => ({
       ...patient,
       ...changes,
       avatar: avatar === undefined ? patient.avatar : avatar || this.avatarFor(changes.name),
@@ -169,8 +177,8 @@ export class VivaceService {
     return true;
   }
 
-  submitDailyCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>): void {
-    this.updatePatient(patientId, patient => {
+  submitDailyCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>): Promise<boolean> {
+    return this.updatePatient(patientId, patient => {
       const now = new Date();
       const status: AlertSeverity = data.painLevel >= 7 || data.temperature >= 37.8
         ? 'critico'
@@ -262,8 +270,8 @@ export class VivaceService {
     }));
   }
 
-  uploadWoundPhoto(patientId: string, imageUrl: string, patientNotes?: string): void {
-    this.updatePatient(patientId, patient => {
+  uploadWoundPhoto(patientId: string, imageUrl: string, patientNotes?: string): Promise<boolean> {
+    return this.updatePatient(patientId, patient => {
       const now = new Date();
       const photo: WoundPhoto = {
         id: `wp-${Date.now()}`,
@@ -318,20 +326,41 @@ export class VivaceService {
     });
   }
 
-  sendMessage(patientId: string, text: string, sender: ChatMessage['sender']): void {
+  async sendMessage(patientId: string, text: string, sender: ChatMessage['sender']): Promise<boolean> {
     const messageText = text.trim();
-    if (!messageText) return;
-    this.updatePatient(patientId, patient => ({
-      ...patient,
-      messages: [...patient.messages, {
-        id: `msg-${Date.now()}`,
-        sender,
-        senderName: sender === 'equipe' ? this.professionalUser().name : patient.name,
-        timestamp: `Hoje às ${this.time(new Date())}`,
-        text: messageText,
-        isRead: sender === 'equipe'
-      }]
-    }));
+    const patient = this.patients().find(item => item.id === patientId);
+    if (!messageText || !patient) return false;
+    const message: ChatMessage = {
+      id: `msg-${crypto.randomUUID()}`,
+      sender,
+      senderName: sender === 'equipe' ? this.professionalUser().name : patient.name,
+      timestamp: this.time(new Date()),
+      text: messageText,
+      isRead: false
+    };
+    this.mergeChatMessage(patientId, message);
+    try {
+      const response = await fetch(this.apiUrl('/api/messages'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          patientId,
+          text: message.text,
+          sender: message.sender,
+          senderName: message.senderName,
+          clientMessageId: message.id
+        })
+      });
+      if (!response.ok) throw new Error('Message not saved');
+      const result = await response.json() as { message: ChatMessage };
+      this.mergeChatMessage(patientId, result.message);
+      return true;
+    } catch {
+      this.patientsState.update(patients => patients.map(item => item.id === patientId
+        ? { ...item, messages: item.messages.filter(itemMessage => itemMessage.id !== message.id) }
+        : item));
+      return false;
+    }
   }
 
   addClinicalNote(patientId: string, text: string): void {
@@ -352,9 +381,9 @@ export class VivaceService {
     this.updatePatient(patientId, patient => ({ ...patient, status }));
   }
 
-  private updatePatient(patientId: string, updater: (patient: Patient) => Patient): void {
+  private updatePatient(patientId: string, updater: (patient: Patient) => Patient): Promise<boolean> {
     this.patientsState.update(patients => patients.map(patient => patient.id === patientId ? updater(patient) : patient));
-    void this.saveSharedState();
+    return this.saveSharedState();
   }
 
   private medicationAdherence(medications: MedicationItem[]): number {
@@ -374,6 +403,10 @@ export class VivaceService {
 
   private async loadSharedState(initialize = true): Promise<void> {
     if (this.pendingSaves > 0) return;
+    if (this.hasUnsavedChanges) {
+      await this.saveSharedState();
+      return;
+    }
     try {
       const response = await fetch(this.apiUrl());
       if (response.status === 204) {
@@ -397,26 +430,62 @@ export class VivaceService {
     }
   }
 
-  private saveSharedState(): Promise<void> {
+  private saveSharedState(): Promise<boolean> {
+    this.stateRevision++;
+    this.hasUnsavedChanges = true;
+    this.storeSyncPending(true);
     this.pendingSaves++;
-    this.saveQueue = this.saveQueue.then(async () => {
+    const operation = this.saveQueue.then(async () => {
+      const revision = this.stateRevision;
       try {
-        await fetch(this.apiUrl(), {
+        const response = await fetch(this.apiUrl(), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ patients: this.patients(), professionals: this.professionals() })
         });
+        if (!response.ok) return false;
+        if (this.stateRevision === revision) {
+          this.hasUnsavedChanges = false;
+          this.storeSyncPending(false);
+        }
+        return true;
       } catch {
-        // The next user action will retry while local storage retains the current state.
+        return false;
       } finally {
         this.pendingSaves--;
       }
     });
-    return this.saveQueue;
+    this.saveQueue = operation.then(() => undefined);
+    return operation;
   }
 
-  private apiUrl(): string {
-    return `${location.protocol}//${location.hostname}:3001/api/state`;
+  private apiUrl(path = '/api/state'): string {
+    return `${location.protocol}//${location.hostname}:3001${path}`;
+  }
+
+  private listenForMessages(): void {
+    const events = new EventSource(this.apiUrl('/api/events'));
+    events.onmessage = event => {
+      try {
+        const payload = JSON.parse(event.data) as { type?: string; patientId?: string; message?: ChatMessage };
+        if (payload.type === 'message.created' && payload.patientId && payload.message) {
+          this.mergeChatMessage(payload.patientId, payload.message);
+        }
+      } catch {
+        // Invalid events are ignored; polling remains available as a fallback.
+      }
+    };
+  }
+
+  private mergeChatMessage(patientId: string, message: ChatMessage): void {
+    this.patientsState.update(patients => patients.map(patient => {
+      if (patient.id !== patientId) return patient;
+      const existingIndex = patient.messages.findIndex(item => item.id === message.id);
+      if (existingIndex < 0) return { ...patient, messages: [...patient.messages, message] };
+      const messages = [...patient.messages];
+      messages[existingIndex] = message;
+      return { ...patient, messages };
+    }));
   }
 
   private loadPatients(): Patient[] {
@@ -450,6 +519,23 @@ export class VivaceService {
       return session;
     } catch {
       return null;
+    }
+  }
+
+  private loadSyncPending(): boolean {
+    try {
+      return localStorage.getItem(SYNC_PENDING_STORAGE_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  private storeSyncPending(pending: boolean): void {
+    try {
+      if (pending) localStorage.setItem(SYNC_PENDING_STORAGE_KEY, 'true');
+      else localStorage.removeItem(SYNC_PENDING_STORAGE_KEY);
+    } catch {
+      // In-memory retries still protect the current session when storage is unavailable.
     }
   }
 

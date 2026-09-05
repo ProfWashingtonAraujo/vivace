@@ -1,0 +1,53 @@
+<section class="space-y-5">
+  @if (feedbackMessage()) {
+    <div role="status" class="px-4 py-3 rounded-2xl border text-sm font-bold" [class.bg-[#ECFDF5]]="!feedbackError()" [class.border-[#A7F3D0]]="!feedbackError()" [class.text-[#047857]]="!feedbackError()" [class.bg-[#FFF1F2]]="feedbackError()" [class.border-[#FECDD3]]="feedbackError()" [class.text-[#BE123C]]="feedbackError()">{{ feedbackMessage() }}</div>
+  }
+
+  <div class="grid lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] gap-6 items-start">
+    <article class="bg-white rounded-3xl border border-[#E2E8F0] shadow-sm p-5 sm:p-7">
+      <div class="mb-5">
+        <p class="text-xs font-bold uppercase tracking-[0.16em] text-[#7C3AED]">Cadastro clínico</p>
+        <h2 class="mt-1 text-xl font-bold text-[#134E4A]">{{ editingPatientId() ? 'Editar paciente' : 'Novo paciente' }}</h2>
+      </div>
+      <form (submit)="savePatient($event)" class="grid sm:grid-cols-2 gap-4" novalidate>
+        <div class="sm:col-span-2 flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl">
+          @if (patientAvatar()) {<img [src]="patientAvatar()" alt="Prévia da foto do paciente" class="w-20 h-20 rounded-2xl object-cover border border-[#E2E8F0]" />} @else {<div class="w-20 h-20 rounded-2xl bg-[#E6F4F1] text-[#134E4A] grid place-items-center text-2xl font-bold">{{ patientModel().name.charAt(0) || 'P' }}</div>}
+          <div class="flex-1"><strong class="block text-sm">Foto do paciente</strong><p class="mt-1 text-[10px] text-[#718096]">JPEG, PNG ou WebP, com até 5 MB.</p><div class="flex flex-wrap gap-2 mt-3"><input #photoInput type="file" accept="image/jpeg,image/png,image/webp" (change)="selectAvatar($event)" class="sr-only" /><button type="button" (click)="photoInput.click()" [disabled]="processingAvatar()" class="px-4 py-2 bg-[#134E4A] text-white rounded-xl text-xs font-bold disabled:opacity-60">{{ processingAvatar() ? 'Processando...' : patientAvatar() ? 'Trocar foto' : 'Escolher foto' }}</button>@if (patientAvatar()) {<button type="button" (click)="patientAvatar.set('')" class="px-4 py-2 bg-[#FFF1F2] text-[#BE123C] rounded-xl text-xs font-bold">Remover</button>}</div></div>
+        </div>
+        @if (avatarError()) {<p role="alert" class="sm:col-span-2 -mt-2 text-xs font-bold text-[#BE123C]">{{ avatarError() }}</p>}
+        <label class="sm:col-span-2 text-xs font-bold">Nome completo<input [formField]="patientForm.name" class="form-input" placeholder="Nome do paciente" /></label>
+        <label class="text-xs font-bold">Idade<input type="number" [formField]="patientForm.age" class="form-input" /></label>
+        <label class="text-xs font-bold">Gênero<select [formField]="patientForm.gender" class="form-input"><option value="">Selecione</option><option>Feminino</option><option>Masculino</option><option>Não binário</option><option>Prefere não informar</option></select></label>
+        <label class="text-xs font-bold">E-mail<input type="email" [formField]="patientForm.email" class="form-input" placeholder="paciente@email.com" /></label>
+        <label class="text-xs font-bold">Telefone<input [formField]="patientForm.phone" class="form-input" placeholder="(00) 00000-0000" /></label>
+        <label class="text-xs font-bold">Senha<input type="password" autocomplete="new-password" [formField]="patientForm.password" class="form-input" placeholder="Mínimo de 8 caracteres" /></label>
+        <label class="text-xs font-bold">Confirmar senha<input type="password" autocomplete="new-password" [formField]="patientForm.passwordConfirmation" class="form-input" placeholder="Digite novamente" /></label>
+        @if (editingPatientId()) {<p class="sm:col-span-2 -mt-2 text-[10px] text-[#718096]">Deixe os campos de senha vazios para manter a senha atual.</p>}
+        <label class="text-xs font-bold">CPF<input [formField]="patientForm.cpf" class="form-input" placeholder="000.000.000-00" /></label>
+        <label class="text-xs font-bold">Procedimento<input [formField]="patientForm.procedure" class="form-input" placeholder="Procedimento realizado" /></label>
+        <label class="text-xs font-bold">Data da cirurgia<input type="date" [formField]="patientForm.surgeryDate" class="form-input" /></label>
+        <label class="text-xs font-bold">Data da alta<input type="date" [formField]="patientForm.dischargeDate" class="form-input" /></label>
+        <label class="sm:col-span-2 text-xs font-bold">Hospital<input [formField]="patientForm.hospital" class="form-input" placeholder="Unidade hospitalar" /></label>
+        <div class="sm:col-span-2 mt-2 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+          @if (editingPatientId()) {<button type="button" (click)="cancelPatientEdit()" class="px-5 py-3 border border-[#E2E8F0] text-[#718096] rounded-2xl text-sm font-bold">Cancelar</button>}
+          <button type="submit" [disabled]="patientForm().submitting()" class="px-5 py-3 bg-[#134E4A] text-white rounded-2xl text-sm font-bold disabled:opacity-60">{{ editingPatientId() ? 'Salvar alterações' : 'Cadastrar paciente' }}</button>
+        </div>
+      </form>
+    </article>
+
+    <aside class="bg-white rounded-3xl border border-[#E2E8F0] shadow-sm p-5">
+      <h2 class="font-bold text-[#134E4A]">Pacientes cadastrados</h2>
+      <p class="mt-1 text-xs text-[#718096]">{{ vivace.patients().length }} pacientes sob acompanhamento.</p>
+      <div class="mt-4 space-y-3 max-h-[620px] overflow-y-auto">
+        @for (patient of vivace.patients(); track patient.id) {
+          <div class="flex items-center gap-3 p-3 rounded-2xl bg-[#F8FAFC]">
+            <img [src]="patient.avatar" [alt]="patient.name" class="w-10 h-10 rounded-xl object-cover" />
+            <div class="min-w-0 flex-1"><strong class="block text-xs truncate">{{ patient.name }}</strong><span class="block text-[10px] text-[#718096] truncate">{{ patient.procedure }} · D+{{ patient.postOpDay }}</span></div>
+            <button type="button" (click)="editPatient(patient)" class="px-2 py-1 text-[10px] font-bold text-[#134E4A] hover:bg-[#E6F4F1] rounded-lg">Editar</button>
+            <button type="button" (click)="deletePatient(patient)" class="px-2 py-1 text-[10px] font-bold text-[#BE123C] hover:bg-[#FFF1F2] rounded-lg">Excluir</button>
+          </div>
+        }
+      </div>
+    </aside>
+  </div>
+</section>
