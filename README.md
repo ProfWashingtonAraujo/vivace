@@ -21,7 +21,7 @@ Plataforma Angular para acompanhamento pós-operatório, com experiências separ
 
 ## Executar
 
-Requer Node.js 20.19 ou superior.
+Requer Node.js 22.9 ou superior.
 
 ```bash
 npm install
@@ -34,7 +34,13 @@ O comando também inicia a API de persistência na porta `3001`. Os dados compar
 
 ### Portas
 
-As portas podem ser alteradas por variáveis de ambiente:
+As portas são configuradas por variáveis de ambiente. Para torná-las permanentes, copie `.env.example` para `.env` e ajuste os valores:
+
+```bash
+cp .env.example .env
+```
+
+O `.env` é carregado automaticamente pelo `npm run dev` e pelo `npm run start`. Também é possível passar as variáveis direto no comando:
 
 ```bash
 VIVACE_FRONTEND_PORT=4321 VIVACE_API_PORT=4001 npm run dev
@@ -44,6 +50,14 @@ VIVACE_FRONTEND_PORT=4321 VIVACE_API_PORT=4001 npm run dev
 - `VIVACE_API_PORT`: porta da API de persistência (padrão `3001`)
 - `VIVACE_DATA_DIRECTORY`: pasta dos dados compartilhados (padrão `.data/`)
 - `VIVACE_SKIP_FRONTEND=true`: inicia apenas a API
+
+Verifique se as portas estão livres antes de iniciar:
+
+```bash
+ss -tln | grep -E ':(3000|3001)'
+```
+
+Se a `VIVACE_API_PORT` estiver ocupada por outro servidor, o check-in no celular vai exibir "não foi sincronizado": o frontend cai no servidor alheio, que responde 404 em `/api/state`, e o salvamento é descartado. Use outra porta em `VIVACE_API_PORT`.
 
 ## Validar
 
