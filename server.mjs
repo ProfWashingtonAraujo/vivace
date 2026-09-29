@@ -12,6 +12,7 @@ const dataDirectory = process.env.VIVACE_DATA_DIRECTORY
   : join(root, '.data');
 const dataFile = join(dataDirectory, 'vivace-state.json');
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
+const frontendPort = Number(process.env.VIVACE_FRONTEND_PORT ?? 3000);
 let writeQueue = Promise.resolve();
 const eventClients = new Set();
 
@@ -170,11 +171,29 @@ api.listen(apiPort, '0.0.0.0', () => {
       }
     }
   }
+  if (!angular) return;
+  console.log(`Vivace frontend: http://localhost:${frontendPort}`);
+  for (const addresses of Object.values(networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      if (address.family === 'IPv4' && !address.internal) {
+        console.log(`Network frontend: http://${address.address}:${frontendPort}`);
+      }
+    }
+  }
 });
 
 const angular = process.env.VIVACE_SKIP_FRONTEND === 'true'
   ? null
-  : spawn(process.execPath, [join(root, 'node_modules', '@angular', 'cli', 'bin', 'ng.js'), 'serve', '--port', '3000', '--host', '0.0.0.0'], {
+  : spawn(process.execPath, [
+      join(root, 'node_modules', '@angular', 'cli', 'bin', 'ng.js'),
+      'serve',
+      '--port',
+      String(frontendPort),
+      '--host',
+      '0.0.0.0',
+      '--define',
+      `VIVACE_API_PORT="${apiPort}"`
+    ], {
       cwd: root,
       stdio: 'inherit'
     });

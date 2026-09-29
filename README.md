@@ -32,6 +32,19 @@ A aplicação estará disponível em `http://localhost:3000`. Outros dispositivo
 
 O comando também inicia a API de persistência na porta `3001`. Os dados compartilhados ficam em `.data/` no computador que executa a aplicação.
 
+### Portas
+
+As portas podem ser alteradas por variáveis de ambiente:
+
+```bash
+VIVACE_FRONTEND_PORT=4321 VIVACE_API_PORT=4001 npm run dev
+```
+
+- `VIVACE_FRONTEND_PORT`: porta do frontend Angular (padrão `3000`)
+- `VIVACE_API_PORT`: porta da API de persistência (padrão `3001`)
+- `VIVACE_DATA_DIRECTORY`: pasta dos dados compartilhados (padrão `.data/`)
+- `VIVACE_SKIP_FRONTEND=true`: inicia apenas a API
+
 ## Validar
 
 ```bash
