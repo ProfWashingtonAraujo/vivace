@@ -1,0 +1,340 @@
+import { spawn, spawnSync } from 'node:child_process';
+import { openSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
+import { after, before, describe, it } from 'node:test';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const base = 'http://127.0.0.1:3194';
+const json = { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' };
+
+const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1' } = {}) => {
+  const headers = { ...json, 'X-Forwarded-For': ip };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${base}${path}`, {
+    method,
+    headers,
+    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  });
+  const text = await response.text();
+  let parsed = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { raw: text.slice(0, 200) };
+  }
+  return { status: response.status, body: parsed };
+};
+
+const login = async (username, password = 'vivace-demo', ip = '10.0.0.1') => {
+  const result = await call('/api/auth/login', { method: 'POST', body: { username, password }, ip });
+  assert.equal(result.status, 200, `login de ${username} falhou: ${JSON.stringify(result.body)}`);
+  return result.body;
+};
+
+let serverPid = null;
+
+before(async () => {
+  const importResult = spawnSync(process.execPath, [resolve(root, 'db/import-from-json.mjs'), '--force'], { cwd: root, encoding: 'utf8' });
+  assert.equal(importResult.status, 0, `import falhou: ${importResult.stderr}`);
+
+  // detached + stdio em arquivo: se o processo filho herdar o stdout, o runner
+  // de teste nunca ve EOF e trava.
+  const log = openSync('/tmp/vivace-api-test.log', 'w');
+  const server = spawn(process.execPath, ['server.mjs'], {
+    cwd: root,
+    detached: true,
+    stdio: ['ignore', log, log],
+    env: {
+      ...process.env,
+      DATABASE_URL: 'postgres://vivace_api:vivace@127.0.0.1:55432/vivace',
+      MIGRATION_DATABASE_URL: 'postgres://vivace:vivace@127.0.0.1:55432/vivace',
+      VIVACE_SKIP_FRONTEND: 'true',
+      VIVACE_API_PORT: '3194'
+    }
+  });
+  serverPid = server.pid;
+  server.unref();
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise(resolve => setTimeout(resolve, 250));
+    try {
+      const probe = await call('/api/state');
+      if (probe.status === 401) return;
+    } catch {
+      // ainda subindo
+    }
+  }
+  throw new Error('servidor nao respondeu em 10s');
+});
+
+after(() => {
+  if (serverPid) {
+    // Mata o grupo inteiro: o servidor cria socket e pool, e pode ter filho.
+    try {
+      process.kill(-serverPid, 'SIGKILL');
+    } catch {
+      spawnSync('kill', ['-9', String(serverPid)]);
+    }
+  }
+  const restore = spawnSync(process.execPath, [resolve(root, 'db/import-from-json.mjs'), '--force'], { cwd: root, encoding: 'utf8' });
+  if (restore.status !== 0) console.error('falha ao restaurar o banco');
+});
+
+describe('login', () => {
+  it('autentica profissional, paciente e admin', async () => {
+    assert.equal((await login('Rafaely Carvalho')).role, 'professional');
+    assert.equal((await login('mariana')).role, 'patient');
+    assert.equal((await login('admin@vivace.med.br')).role, 'admin');
+  });
+
+  it('senha errada nao entra', async () => {
+    const result = await call('/api/auth/login', { method: 'POST', body: { username: 'mariana', password: 'errada' } });
+    assert.equal(result.status, 401);
+  });
+});
+
+describe('GET /api/state por papel', () => {
+  it('admin ve tudo, inclusive os 4 pacientes e profissionais', async () => {
+    const state = (await call('/api/state', { token: (await login('admin@vivace.med.br')).token })).body;
+    assert.equal(state.patients.length, 4);
+    assert.equal(state.professionals.length, 1);
+    assert.equal(state.admins.length, 1);
+  });
+
+  it('profissional ve os 4 pacientes, mas so o proprio cadastro', async () => {
+    const token = (await login('Rafaely Carvalho')).token;
+    const state = (await call('/api/state', { token })).body;
+    assert.equal(state.patients.length, 4);
+    // Corrige o bug de professionalUser() ser professionals()[0].
+    assert.deepEqual(state.professionals.map(p => p.id), ['prof-1']);
+    assert.equal(state.admins.length, 0);
+  });
+
+  it('paciente ve so o proprio registro, sem notas clinicas e sem profissionais', async () => {
+    const token = (await login('mariana')).token;
+    const state = (await call('/api/state', { token })).body;
+    assert.deepEqual(state.patients.map(p => p.id), ['pat-1']);
+    assert.deepEqual(state.patients[0].clinicalNotes, []);
+    assert.deepEqual(state.professionals, []);
+    assert.deepEqual(state.admins, []);
+  });
+
+  it('nenhum payload carrega senha', async () => {
+    for (const username of ['Rafaely Carvalho', 'mariana', 'admin@vivace.med.br']) {
+      const raw = await fetch(`${base}/api/state`, {
+        headers: { ...json, Authorization: `Bearer ${(await login(username)).token}` }
+      }).then(response => response.text());
+      assert.ok(!raw.includes('scrypt$'), `payload de ${username} vazou hash`);
+      assert.ok(!/"password"/.test(raw), `payload de ${username} tem campo password`);
+    }
+  });
+});
+
+describe('PUT /api/state', () => {
+  it('professional altera paciente visivel', async () => {
+    const token = (await login('Rafaely Carvalho')).token;
+    const state = (await call('/api/state', { token })).body;
+    const target = state.patients.find(patient => patient.id === 'pat-3');
+    target.bloodPressure = '111/77 mmHg';
+    const put = await call('/api/state', { method: 'PUT', token, body: state });
+    assert.equal(put.status, 200);
+    const after = (await call('/api/state', { token })).body.patients.find(patient => patient.id === 'pat-3');
+    assert.equal(after.bloodPressure, '111/77 mmHg');
+  });
+
+  it('profissional nao apaga paciente alheio ao enviar estado parcial', async () => {
+    // O caso que rejectForeignPatients resolvia na mao: prof-9 so enxerga pat-1 e
+    // pat-2, entao o payload dele nao traz pat-3 nem pat-4. O DELETE por conjunto
+    // nao pode alcancar linhas invisiveis, senao o PUT de um profissional
+    // apagaria o prontuario dos colegas.
+    const admin = (await login('admin@vivace.med.br')).token;
+    const full = (await call('/api/state', { token: admin })).body;
+    const professionals = [
+      ...full.professionals,
+      { id: 'prof-9', name: 'Helena Duarte', role: 'Cirurgia Plastica', crmCoren: 'CRM-SP 222.111', avatar: '', email: 'helena@vivace.med.br', specialty: 'Cirurgia Plastica', password: 'vivace-demo' }
+    ];
+    const created = await call('/api/state', { method: 'PUT', token: admin, body: { ...full, professionals } });
+    assert.equal(created.status, 200, `cadastro do profissional falhou: ${JSON.stringify(created.body)}`);
+
+    const outsider = await login('Helena Duarte', 'vivace-demo');
+    const visible = (await call('/api/state', { token: outsider.token })).body.patients.map(p => p.id);
+    // prof-9 nao esta na equipe de ninguem, entao so enxerga o paciente sem
+    // cirurgiao atribuido. pat-1, pat-3 e pat-4 tem equipe (prof-1).
+    assert.deepEqual(visible, ['pat-2']);
+
+    const partial = (await call('/api/state', { token: outsider.token })).body;
+    assert.equal((await call('/api/state', { method: 'PUT', token: outsider.token, body: partial })).status, 200);
+
+    const survivors = (await call('/api/state', { token: admin })).body.patients.map(p => p.id);
+    assert.deepEqual(survivors, ['pat-1', 'pat-2', 'pat-3', 'pat-4'], 'o PUT parcial nao pode apagar prontuario alheio');
+  });
+
+  it('paciente nao faz PUT', async () => {
+    const token = (await login('mariana')).token;
+    const result = await call('/api/state', { method: 'PUT', token, body: { patients: [], professionals: [] } });
+    assert.equal(result.status, 403);
+  });
+});
+
+describe('mensagens, check-in e medicamento', () => {
+  it('paciente envia mensagem para si mesmo', async () => {
+    const token = (await login('mariana')).token;
+    const result = await call('/api/messages', {
+      method: 'POST', token, body: { patientId: 'pat-1', text: 'Sem febre hoje', clientMessageId: 'msg-teste-1' }
+    });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.message.sender, 'paciente');
+    assert.equal(result.body.message.text, 'Sem febre hoje');
+  });
+
+  it('mensagem duplicada nao duplica', async () => {
+    const token = (await login('mariana')).token;
+    const body = { patientId: 'pat-1', text: 'Sem febre hoje', clientMessageId: 'msg-teste-1' };
+    await call('/api/messages', { method: 'POST', token, body });
+    const state = (await call('/api/state', { token })).body;
+    assert.equal(state.patients[0].messages.filter(m => m.id === 'msg-teste-1').length, 1);
+  });
+
+  it('paciente nao manda mensagem para o registro de outro', async () => {
+    const token = (await login('mariana')).token;
+    const result = await call('/api/messages', {
+      method: 'POST', token, body: { patientId: 'pat-2', text: 'intruso' }
+    });
+    assert.equal(result.status, 403);
+  });
+
+  it('paciente nao acha paciente inexistente', async () => {
+    const token = (await login('Rafaely Carvalho')).token;
+    const result = await call('/api/messages', {
+      method: 'POST', token, body: { patientId: 'pat-inexistente', text: 'oi' }
+    });
+    assert.equal(result.status, 404);
+  });
+
+  it('check-in do paciente entra no inicio da lista e atualiza os sinais', async () => {
+    const token = (await login('mariana')).token;
+    const result = await call('/api/checkins', {
+      method: 'POST',
+      token,
+      body: {
+        id: 'chk-e2e-1',
+        patientId: 'pat-1',
+        checkIn: { date: '30/09/2026', dayLabel: 'D+9', painLevel: 8, temperature: 38.1, mobilityScore: 'repouso_absoluto', symptoms: ['febre'], notes: 'teste', mood: 'preocupado' }
+      }
+    });
+    assert.equal(result.status, 201);
+    const patient = result.body.patient;
+    // A UI le checkIns[0] como "hoje".
+    assert.equal(patient.checkIns[0].id, 'chk-e2e-1');
+    assert.equal(patient.currentPain, 8);
+    assert.equal(patient.status, 'critico');
+    // Nota clinica nao volta para papel de paciente: era um vazamento antes.
+    assert.deepEqual(patient.clinicalNotes, []);
+    // Timeline cresce no fim.
+    assert.equal(patient.timeline[patient.timeline.length - 1].id, 'tl-chk-e2e-1');
+  });
+
+  it('check-in repetido com o mesmo id nao duplica', async () => {
+    const token = (await login('mariana')).token;
+    const body = {
+      id: 'chk-e2e-1', patientId: 'pat-1',
+      checkIn: { date: '30/09/2026', dayLabel: 'D+9', painLevel: 8, temperature: 38.1, symptoms: [], notes: '', mood: 'preocupado' }
+    };
+    await call('/api/checkins', { method: 'POST', token, body });
+    const state = (await call('/api/state', { token })).body;
+    assert.equal(state.patients[0].checkIns.filter(c => c.id === 'chk-e2e-1').length, 1);
+  });
+
+  it('medicamento alterna takenToday e recalcula adherencia', async () => {
+    const token = (await login('mariana')).token;
+    const before = (await call('/api/state', { token })).body.patients[0];
+    const medication = before.medications[0];
+    const time = medication.times[0];
+    const wasTaken = medication.takenToday[time];
+
+    const result = await call('/api/medication-taken', {
+      method: 'POST', token, body: { patientId: 'pat-1', medicationId: medication.id, time }
+    });
+    assert.equal(result.status, 200);
+    const after = result.body.patient.medications.find(m => m.id === medication.id);
+    assert.equal(after.takenToday[time], !wasTaken);
+
+    // A aderencia e a razao de slots tomados, entao tem que refletir o toggle.
+    const slots = result.body.patient.medications.flatMap(m => m.times.map(t => m.takenToday[t]));
+    const expected = Math.round(slots.filter(Boolean).length / slots.length * 100);
+    assert.equal(result.body.patient.medicationAdherencePercent, expected);
+  });
+
+  it('check-in de paciente alheio grava no proprio registro, nunca no alheio', async () => {
+    // O servidor substitui patientId pelo da sessao quando o papel e paciente,
+    // entao o check-in vai para pat-1 e pat-3 fica intacto. Nao e 404: e o
+    // comportamento seguro, e o mesmo de antes da migracao.
+    const token = (await login('mariana')).token;
+    const result = await call('/api/checkins', {
+      method: 'POST', token,
+      body: { id: 'chk-intruso', patientId: 'pat-3', checkIn: { painLevel: 1, temperature: 36.5, symptoms: [], notes: '', mood: 'bem' } }
+    });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.patient.id, 'pat-1');
+
+    const adminToken = (await login('admin@vivace.med.br')).token;
+    const adminState = (await call('/api/state', { token: adminToken })).body;
+    assert.ok(!adminState.patients.find(p => p.id === 'pat-3').checkIns.some(c => c.id === 'chk-intruso'));
+  });
+});
+
+describe('ordem das colecoes', () => {
+  it('check_ins decrescente, wound_photos decrescente, timeline e mensagens crescentes', async () => {
+    const token = (await login('Rafaely Carvalho')).token;
+    const patient = (await call('/api/state', { token })).body.patients.find(p => p.id === 'pat-1');
+
+    // A UI le checkIns[0] como "de hoje", entao o mais recente entra no inicio.
+    // Dois check-ins novos foram criados por outros testes, nesta ordem:
+    // chk-e2e-1 e depois chk-intruso. O ultimo criado e o primeiro da lista.
+    const checkIns = patient.checkIns.map(c => c.id);
+    assert.equal(checkIns[0], 'chk-intruso');
+    assert.equal(checkIns[1], 'chk-e2e-1');
+    assert.deepEqual(checkIns.slice(2), [
+      'chk-1790700384906', 'chk-1790699335797', 'chk-1', 'chk-2', 'chk-3'
+    ], 'os check-ins originais mantem a ordem relativa');
+
+    // A timeline e lida em ordem cronologica, entao cresce no fim.
+    const timeline = patient.timeline.map(event => event.id);
+    assert.equal(timeline[0], 'tl-1');
+    assert.equal(timeline[timeline.length - 2], 'tl-chk-e2e-1');
+    assert.equal(timeline[timeline.length - 1], 'tl-chk-intruso');
+
+    // Fotos nao mudam de ordem e continuam sendo 4.
+    assert.deepEqual(patient.woundPhotos.map(photo => photo.id), [
+      'wp-1790700384853', 'wp-1790699335745', 'wp-1', 'wp-2'
+    ]);
+
+    // Mensagens: as originais mais a do teste, em ordem de chegada.
+    const messages = patient.messages.map(message => message.id);
+    assert.deepEqual(messages, ['msg-1', 'msg-2', 'msg-3', 'msg-teste-1']);
+  });
+
+  it('medications preserva ordem e takenToday traz false explicito', async () => {
+    const token = (await login('Rafaely Carvalho')).token;
+    const patient = (await call('/api/state', { token })).body.patients.find(p => p.id === 'pat-1');
+    const medication = patient.medications[0];
+    for (const time of medication.times) {
+      assert.ok(time in medication.takenToday, `takenToday sem a chave ${time}`);
+      assert.equal(typeof medication.takenToday[time], 'boolean');
+    }
+  });
+
+  it('foto de upload volta como data url e a de demonstracao como http', async () => {
+    const token = (await login('Rafaely Carvalho')).token;
+    const patient = (await call('/api/state', { token })).body.patients.find(p => p.id === 'pat-1');
+    const kinds = new Set(patient.woundPhotos.map(photo => photo.imageUrl.slice(0, 14)));
+    assert.ok(kinds.size >= 1);
+    for (const photo of patient.woundPhotos) {
+      const isData = photo.imageUrl.startsWith('data:image/');
+      const isHttp = photo.imageUrl.startsWith('http');
+      assert.ok(isData || isHttp, `origem inesperada: ${photo.imageUrl.slice(0, 40)}`);
+    }
+  });
+});

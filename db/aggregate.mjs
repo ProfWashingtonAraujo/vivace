@@ -128,23 +128,26 @@ const buildPatient = (row, { timeline, photos, medications, times, doses, checkI
   }))
 });
 
-export const readAggregate = async client => {
-  // Consultas sequenciais: um unico client nao pode executar em paralelo.
-  const patientRows = await client.query('SELECT * FROM patients ORDER BY position');
-  const professionalRows = await client.query('SELECT * FROM professionals ORDER BY position');
-  const adminRows = await client.query('SELECT * FROM admins ORDER BY position');
+// Consultas sequenciais: um unico client nao pode executar em paralelo.
+const readPatients = async (client, patientId = null) => {
+  const filter = patientId === null ? '' : 'WHERE patient_id = $1';
+  const params = patientId === null ? [] : [patientId];
+  const all = patientId === null ? '' : 'WHERE id = $1';
+  const patientRows = await client.query(`SELECT * FROM patients ${all} ORDER BY position`, params);
+  if (!patientRows.rows.length) return [];
+
   const teamRows = await client.query(`SELECT t.*, p.name, p.crm_coren
                   FROM patient_care_team t JOIN professionals p ON p.id = t.professional_id
                   ORDER BY t.patient_id, t.position`);
-  const timelineRows = await client.query('SELECT * FROM timeline_events');
-  const photoRows = await client.query('SELECT * FROM wound_photos');
-  const medicationRows = await client.query('SELECT * FROM medications');
-  const timeRows = await client.query('SELECT * FROM medication_times');
-  const doseRows = await client.query('SELECT * FROM medication_doses');
-  const checkInRows = await client.query('SELECT * FROM check_ins');
-  const messageRows = await client.query('SELECT * FROM messages');
-  const instructionRows = await client.query('SELECT * FROM instructions');
-  const noteRows = await client.query('SELECT * FROM clinical_notes');
+  const timelineRows = await client.query(`SELECT * FROM timeline_events ${filter}`, params);
+  const photoRows = await client.query(`SELECT * FROM wound_photos ${filter}`, params);
+  const medicationRows = await client.query(`SELECT * FROM medications ${filter}`, params);
+  const timeRows = await client.query(`SELECT * FROM medication_times ${filter}`, params);
+  const doseRows = await client.query(`SELECT * FROM medication_doses ${filter}`, params);
+  const checkInRows = await client.query(`SELECT * FROM check_ins ${filter}`, params);
+  const messageRows = await client.query(`SELECT * FROM messages ${filter}`, params);
+  const instructionRows = await client.query(`SELECT * FROM instructions ${filter}`, params);
+  const noteRows = await client.query(`SELECT * FROM clinical_notes ${filter}`, params);
 
   const byPatient = {
     timeline: groupByPatient(timelineRows.rows),
@@ -159,7 +162,7 @@ export const readAggregate = async client => {
   const dosesByPatient = groupByPatient(doseRows.rows);
   const teamByPatient = groupByPatient(teamRows.rows);
 
-  const patients = patientRows.rows.map(row => {
+  return patientRows.rows.map(row => {
     const team = teamByPatient.get(row.id) ?? [];
     const primary = team.find(member => member.role === 'cirurgiao') ?? team[0];
     // O nome vem da equipe (assim renomear o profissional atualiza a tela, como
@@ -178,18 +181,26 @@ export const readAggregate = async client => {
       surgeon
     });
   });
-
-  return {
-    patients,
-    professionals: professionalRows.rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      role: row.job_title,
-      crmCoren: row.crm_coren,
-      avatar: row.avatar,
-      email: row.email,
-      specialty: row.specialty
-    })),
-    admins: adminRows.rows.map(row => ({ id: row.id, name: row.name, email: row.email }))
-  };
 };
+
+export const readAggregate = async client => ({
+  patients: await readPatients(client),
+  professionals: (await client.query('SELECT * FROM professionals ORDER BY position')).rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    role: row.job_title,
+    crmCoren: row.crm_coren,
+    avatar: row.avatar,
+    email: row.email,
+    specialty: row.specialty
+  })),
+  admins: (await client.query('SELECT * FROM admins ORDER BY position')).rows.map(row => ({
+    id: row.id,
+    name: row.name,
+    email: row.email
+  }))
+});
+
+// Um paciente so. Devolve null quando o RLS esconde o registro, que e o mesmo
+// sinal de "nao encontrado" que a API ja usava.
+export const readPatient = (client, patientId) => readPatients(client, patientId).then(rows => rows[0] ?? null);
