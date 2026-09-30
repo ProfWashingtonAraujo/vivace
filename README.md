@@ -12,6 +12,7 @@ Plataforma Angular para acompanhamento pós-operatório, com experiências separ
 - Tailwind CSS 4
 - API Node com autenticação por token, senhas em `scrypt` e permissões por papel
 - Persistência demonstrativa compartilhada na rede local, com contingência em `localStorage`
+- PostgreSQL 18 com schema normalizado e RLS em preparação (ver [Banco de dados](#banco-de-dados))
 
 ## Funcionalidades
 
@@ -32,7 +33,35 @@ npm run dev
 
 A aplicação estará disponível em `http://localhost:3000`. Outros dispositivos na mesma rede podem acessar pelo IP do computador, por exemplo `http://192.168.0.4:3000`.
 
-O comando também inicia a API de persistência na porta `3001`. Os dados compartilhados ficam em `.data/` no computador que executa a aplicação.
+O comando também inicia a API de persistência na porta `3001`.
+
+## Banco de dados
+
+O estado clínico está sendo migrado do arquivo JSON para o PostgreSQL, com acesso controlado por RLS. Hoje o servidor ainda lê e grava o JSON: o schema, o importador e a verificação de paridade já existem, e a troca do servidor vem nas próximas etapas.
+
+Suba um PostgreSQL local de desenvolvimento (cluster descartável em `.pgdata/`, porta `55432`, criado com `initdb`/`pg_ctl`, sem exigir `root`):
+
+```bash
+npm run db:cluster
+npm run db:migrate
+npm run db:import
+npm run db:verify
+```
+
+- `db:cluster`: `start`, `stop`, `status` ou `destroy` (`node db/dev-cluster.mjs <comando>`)
+- `db:migrate`: aplica `db/migrations/*.sql` em ordem, cada arquivo em uma transação, registrado em `schema_migrations` com checksum. Editar uma migração já aplicada faz o comando abortar; escreva uma nova.
+- `db:import`: importa `.data/vivace-state.json`. Trunca e reinsere, então exige `--force` se `patients` já tiver linhas.
+- `db:verify`: reidrata o agregado do banco e compara com o JSON de origem, campo a campo. É o gate da migração.
+
+Dois papéis, e a distinção é o que faz o RLS valer: `MIGRATION_DATABASE_URL` (`vivace`) é dono das tabelas e cria o schema, enquanto `DATABASE_URL` (`vivace_api`) é o papel da aplicação. Policies de RLS não se aplicam ao dono da tabela, então o servidor vai conectar como `vivace_api`.
+
+Detalhes que a normalização teve de preservar, porque o frontend depende deles:
+
+- `position` em toda tabela filha guarda o índice do item no array do JSON. A ordem não é uniforme entre coleções (`check_ins` e `wound_photos` decrescentes, `timeline_events` e `messages` crescentes) e é lida pela tela, como em `checkIns[0]` como check-in de hoje e `medications.slice(0, 2)`.
+- `post_op_day` é coluna armazenada, não derivada de `surgery_date`; os valores em produção são velhos de propósito e os selos "D+n" dependem deles.
+- Fotos de upload viram `bytea`; fotos de demonstração ficam só em `image_source_url`. A distinção substitui o truque `imageUrl.includes('images.unsplash.com')` do frontend.
+- `patient_care_team` decide **acesso**, com vários profissionais por paciente. `surgeon_label` guarda o **rótulo exibido** e só é usado quando o paciente não tem equipe, caso do `pat-2`, cujo cirurgião não tem cadastro. Sem essa separação, dar cadastro ao profissional inexistente tiraria o paciente da vista de quem o vê hoje.
+- A API passa a devolver sempre as chaves opcionais `patientNotes`, `notes`, `reviewedBy`, `reviewedAt`, `reviewFeedback`, `photoUploaded` e `important`, mesmo quando vazias ou `false`. O JSON de origem era misto e alguns registros não tinham a chave; para o frontend, ausente e `false` são equivalentes.
 
 ### Portas
 
@@ -50,7 +79,9 @@ VIVACE_FRONTEND_PORT=4321 VIVACE_API_PORT=4001 npm run dev
 
 - `VIVACE_FRONTEND_PORT`: porta do frontend Angular (padrão `3000`)
 - `VIVACE_API_PORT`: porta da API de persistência (padrão `3001`)
-- `VIVACE_DATA_DIRECTORY`: pasta dos dados compartilhados (padrão `.data/`)
+- `VIVACE_DATA_DIRECTORY`: pasta com o JSON de origem, usada só pelo `npm run db:import` (padrão `.data/`)
+- `DATABASE_URL`: conexão do Postgres usada pela aplicação
+- `MIGRATION_DATABASE_URL`: conexão usada pelas migrações, que precisam criar tabelas
 - `VIVACE_SKIP_FRONTEND=true`: inicia apenas a API
 - `VIVACE_SESSION_TTL_MS`: validade da sessão em milissegundos (padrão `28800000`, 8 horas)
 - `VIVACE_BOOTSTRAP_EMAIL` / `VIVACE_BOOTSTRAP_PASSWORD`: credenciais do administrador inicial (padrão `admin@vivace.med.br` / `vivace-demo`)
@@ -107,4 +138,4 @@ npm run build
 
 ## Escopo
 
-Esta versão é demonstrativa. A API exige autenticação por token, senha com `scrypt` e limite de tentativas por IP e por conta, mas ainda faltam criptografia em repouso, trilha de auditoria, renovação de token e um banco de dados com controle de acesso por registro. Nada disso deve ser usado com dados reais de pacientes.
+Esta versão é demonstrativa. A API exige autenticação por token, senha com `scrypt` e limite de tentativas por IP e por conta, mas ainda faltam criptografia em repouso, trilha de auditoria, renovação de token e o acesso por registro via RLS, que está em preparação. Nada disso deve ser usado com dados reais de pacientes.
