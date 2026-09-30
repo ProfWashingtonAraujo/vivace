@@ -14,6 +14,9 @@ const dataFile = join(dataDirectory, 'vivace-state.json');
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
 const frontendPort = Number(process.env.VIVACE_FRONTEND_PORT ?? 3000);
 const sessionTtlMs = Number(process.env.VIVACE_SESSION_TTL_MS ?? 8 * 60 * 60 * 1000);
+const loginMaxAttempts = Math.max(1, Number(process.env.VIVACE_LOGIN_MAX_ATTEMPTS ?? 5));
+const loginWindowMs = Math.max(1, Number(process.env.VIVACE_LOGIN_WINDOW_MS ?? 15 * 60 * 1000));
+const loginLockoutMs = Math.max(1, Number(process.env.VIVACE_LOGIN_LOCKOUT_MS ?? 15 * 60 * 1000));
 const extraOrigins = (process.env.VIVACE_ALLOWED_ORIGINS ?? '')
   .split(',')
   .map(origin => origin.trim())
@@ -21,6 +24,7 @@ const extraOrigins = (process.env.VIVACE_ALLOWED_ORIGINS ?? '')
 let writeQueue = Promise.resolve();
 const eventClients = new Map();
 const sessions = new Map();
+const loginAttempts = new Map();
 
 const scrypt = (password, salt) => new Promise((resolve, reject) => {
   scryptCallback(password, salt, 64, (error, key) => (error ? reject(error) : resolve(key)));
@@ -75,6 +79,68 @@ const authenticate = request => {
 
 const sessionTokenFromUrl = url => new URL(url, 'http://localhost').searchParams.get('token') ?? '';
 
+const clientAddress = request => {
+  const forwarded = request.headers['x-forwarded-for'];
+  const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
+  if (value) return String(value).split(',')[0].trim();
+  return request.socket.remoteAddress ?? 'desconhecido';
+};
+
+const loginKeys = (request, identifier) => [
+  `ip:${clientAddress(request)}`,
+  `conta:${normalize(identifier)}`
+];
+
+const loginLockoutRemaining = (request, identifier) => {
+  const now = Date.now();
+  let remaining = 0;
+  for (const key of loginKeys(request, identifier)) {
+    const record = loginAttempts.get(key);
+    if (!record) continue;
+    if (record.lockedUntil > now) {
+      remaining = Math.max(remaining, record.lockedUntil - now);
+      continue;
+    }
+    if (record.firstAttempt + loginWindowMs <= now) loginAttempts.delete(key);
+  }
+  return remaining;
+};
+
+const recordLoginFailure = (request, identifier) => {
+  const now = Date.now();
+  for (const key of loginKeys(request, identifier)) {
+    const record = loginAttempts.get(key);
+    const entry = record && record.firstAttempt + loginWindowMs > now
+      ? record
+      : { failures: 0, firstAttempt: now, lockedUntil: 0 };
+    entry.failures += 1;
+    if (entry.failures >= loginMaxAttempts) entry.lockedUntil = now + loginLockoutMs;
+    loginAttempts.set(key, entry);
+  }
+};
+
+const clearLoginFailures = (request, identifier) => {
+  for (const key of loginKeys(request, identifier)) loginAttempts.delete(key);
+};
+
+const humanizeWait = milliseconds => {
+  const seconds = Math.max(1, Math.ceil(milliseconds / 1000));
+  if (seconds < 60) return `${seconds} segundo${seconds === 1 ? '' : 's'}`;
+  const minutes = Math.ceil(seconds / 60);
+  if (minutes < 60) return `${minutes} minuto${minutes === 1 ? '' : 's'}`;
+  const hours = Math.ceil(minutes / 60);
+  return `${hours} hora${hours === 1 ? '' : 's'}`;
+};
+
+const sweepLoginAttempts = () => {
+  const now = Date.now();
+  for (const [key, record] of loginAttempts) {
+    if (record.lockedUntil <= now && record.firstAttempt + loginWindowMs <= now) loginAttempts.delete(key);
+  }
+};
+
+setInterval(sweepLoginAttempts, loginWindowMs).unref();
+
 const allowedOrigin = request => {
   const origin = request.headers.origin;
   if (!origin) return null;
@@ -88,16 +154,18 @@ const allowedOrigin = request => {
   }
 };
 
-const json = (request, response, status, value) => {
+const json = (request, response, status, value, extraHeaders = {}) => {
   const origin = allowedOrigin(request);
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
-    'Vary': 'Origin'
+    'Vary': 'Origin',
+    ...extraHeaders
   };
   if (origin) {
     headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
     headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, DELETE, OPTIONS';
     headers['Access-Control-Allow-Origin'] = origin;
+    headers['Access-Control-Expose-Headers'] = 'Retry-After';
   }
   response.writeHead(status, headers);
   response.end(value === undefined ? undefined : JSON.stringify(value));
@@ -358,6 +426,15 @@ const api = createServer(async (request, response) => {
         json(request, response, 400, { error: 'Informe usuário e senha' });
         return;
       }
+      const lockedFor = loginLockoutRemaining(request, identifier);
+      if (lockedFor > 0) {
+        const retryAfter = Math.ceil(lockedFor / 1000);
+        console.log(`Login bloqueado por ${lockedFor}ms para ${identifier} (${clientAddress(request)})`);
+        json(request, response, 429, {
+          error: `Muitas tentativas de login. Tente novamente em ${humanizeWait(lockedFor)}.`
+        }, { 'Retry-After': String(retryAfter) });
+        return;
+      }
       const storedState = await readState();
       let state = storedState;
       if (!state) {
@@ -367,9 +444,11 @@ const api = createServer(async (request, response) => {
       }
       const account = findAccount(state, identifier);
       if (!account || !(await verifyPassword(password, account.password))) {
+        recordLoginFailure(request, identifier);
         json(request, response, 401, { error: 'Usuário ou senha inválidos' });
         return;
       }
+      clearLoginFailures(request, identifier);
       if (!isHashed(account.password) || account.role === 'admin') {
         writeQueue = writeQueue.catch(() => undefined).then(async () => {
           const current = await readState();

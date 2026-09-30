@@ -88,6 +88,12 @@ Contas de demonstração (senha `vivace-demo`):
 
 No primeiro acesso a API cria a conta de administração inicial. Ao entrar como administrador, todas as senhas ainda em texto plano da base são convertidas para `scrypt`.
 
+### Limite de tentativas de login
+
+O `POST /api/auth/login` conta as falhas por endereço IP e por conta, separadamente. Ao passar de `VIVACE_LOGIN_MAX_ATTEMPTS` (padrão: 5), a resposta vira `429` com o cabeçalho `Retry-After` e a tentativa seguinte só é aceita depois de `VIVACE_LOGIN_LOCKOUT_MS` (padrão: 15 minutos). As falhas somam dentro de uma janela de `VIVACE_LOGIN_WINDOW_MS` (padrão: 15 minutos) e um login bem-sucedido zera os contadores.
+
+Limitar pela conta impede que a força bruta distribuída por vários endereços passe, mas também permite que alguém tranque o acesso de um usuário legítimo com `VIVACE_LOGIN_MAX_ATTEMPTS` tentativas. Como os contadores ficam em memória, um reinício da API libera todo mundo; em produção, o desbloqueio precisa vir de um banco com registro das tentativas.
+
 ## Validar
 
 ```bash
@@ -97,4 +103,4 @@ npm run build
 
 ## Escopo
 
-Esta versão é demonstrativa. A API exige autenticação por token e senha com `scrypt`, mas ainda faltam criptografia em repouso, trilha de auditoria, renovação de token, limite de tentativas de login e um banco de dados com controle de acesso por registro. Nada disso deve ser usado com dados reais de pacientes.
+Esta versão é demonstrativa. A API exige autenticação por token, senha com `scrypt` e limite de tentativas por IP e por conta, mas ainda faltam criptografia em repouso, trilha de auditoria, renovação de token e um banco de dados com controle de acesso por registro. Nada disso deve ser usado com dados reais de pacientes.
