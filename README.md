@@ -12,7 +12,7 @@ Plataforma Angular para acompanhamento pós-operatório, com experiências separ
 - Tailwind CSS 4
 - API Node com autenticação por token, senhas em `scrypt` e permissões por papel
 - Persistência demonstrativa compartilhada na rede local, com contingência em `localStorage`
-- PostgreSQL 18 com schema normalizado e RLS em preparação (ver [Banco de dados](#banco-de-dados))
+- PostgreSQL 18 com schema normalizado, RLS por registro e testes de negação (ver [Banco de dados](#banco-de-dados))
 
 ## Funcionalidades
 
@@ -37,7 +37,7 @@ O comando também inicia a API de persistência na porta `3001`.
 
 ## Banco de dados
 
-O estado clínico está sendo migrado do arquivo JSON para o PostgreSQL, com acesso controlado por RLS. Hoje o servidor ainda lê e grava o JSON: o schema, o importador e a verificação de paridade já existem, e a troca do servidor vem nas próximas etapas.
+O estado clínico está sendo migrado do arquivo JSON para o PostgreSQL, com acesso controlado por RLS. O schema, as policies, o importador e os testes já existem; a troca do servidor vem nas próximas etapas. Hoje `server.mjs` ainda lê e grava o JSON.
 
 Suba um PostgreSQL local de desenvolvimento (cluster descartável em `.pgdata/`, porta `55432`, criado com `initdb`/`pg_ctl`, sem exigir `root`):
 
@@ -46,14 +46,37 @@ npm run db:cluster
 npm run db:migrate
 npm run db:import
 npm run db:verify
+npm test
 ```
 
 - `db:cluster`: `start`, `stop`, `status` ou `destroy` (`node db/dev-cluster.mjs <comando>`)
-- `db:migrate`: aplica `db/migrations/*.sql` em ordem, cada arquivo em uma transação, registrado em `schema_migrations` com checksum. Editar uma migração já aplicada faz o comando abortar; escreva uma nova.
+- `db:migrate`: aplica `db/migrations/*.sql` em ordem, cada arquivo em uma transação, registrado em `schema_migrations` com checksum. Editar uma migração já aplicada faz o comando abortar; escreva uma nova. As migrações pressupõem ordem: reaplicar uma antiga depois de uma posterior não funciona.
 - `db:import`: importa `.data/vivace-state.json`. Trunca e reinsere, então exige `--force` se `patients` já tiver linhas.
 - `db:verify`: reidrata o agregado do banco e compara com o JSON de origem, campo a campo. É o gate da migração.
+- `test`: 23 asserções de RLS, cada uma afirmando a **negação**. Requer o cluster, as migrações e a importação rodados antes. Os testes gravam de verdade para exercitar a escrita, e restauram o banco ao final para não contaminar o gate.
 
-Dois papéis, e a distinção é o que faz o RLS valer: `MIGRATION_DATABASE_URL` (`vivace`) é dono das tabelas e cria o schema, enquanto `DATABASE_URL` (`vivace_api`) é o papel da aplicação. Policies de RLS não se aplicam ao dono da tabela, então o servidor vai conectar como `vivace_api`.
+### Como o acesso é controlado
+
+A identidade da sessão chega ao banco por GUCs locais à transação, montados pelo servidor dentro de um `BEGIN`/`COMMIT` no mesmo cliente do pool:
+
+```sql
+SELECT set_config('app.role', 'patient', true);
+SELECT set_config('app.user_id', 'pat-1', true);
+```
+
+Sem esses GUCs, `app_role_name()` devolve `NULL` e tudo nega: falha fechada. Um papel inventado também não vê nada.
+
+Três pontos que decidem se isso segura de verdade:
+
+- **Policies não se aplicam ao dono da tabela.** `MIGRATION_DATABASE_URL` (`vivace`) cria o schema; `DATABASE_URL` (`vivace_api`) é o papel da aplicação. Além disso há `FORCE ROW LEVEL SECURITY` nas tabelas de domínio. Os testes conectam como `vivace_api` de propósito: testar com o dono não provaria nada.
+- **`app_can_access_patient` é `SECURITY DEFINER` com dono `vivace_rls`, um papel `BYPASSRLS`.** Sem isso a consulta sofreria recursão de policy e, pior, um profissional só veria as próprias linhas da equipe: veria zero linhas para um paciente atendido por outro e concluiria "sem equipe", gaining acesso a todos. Esse papel também precisa de `GRANT SELECT`, já que `BYPASSRLS` pula a policy mas não o privilégio.
+- **O hash de senha não mora nas tabelas clínicas.** `REVOKE SELECT (password_hash)` não funciona: no PostgreSQL o privilégio de coluna é aditivo e não pode ser mais restritivo que o de tabela, então o papel continuava lendo a coluna (o teste chegou a devolver `scrypt$...` para `vivace_api`). Revogar a tabela e conceder coluna a coluna exigiria dezenas de `GRANT`s frágeis a cada coluna nova. A saída foi `account_credentials`, sem privilégio nenhum para `vivace_api`, e o login passa só por `app_lookup_account`. Revogar acesso a uma tabela é garantível; a coluna não era.
+
+As policies espelham o comportamento atual, inclusive dois pontos que parecem contraditórios:
+
+- Profissional sem equipe vê o paciente. Enquanto o paciente não tem cirurgião atribuído, qualquer profissional vê, que é o que `canAccessPatient` fazia em JS.
+- Paciente não vê nota clínica, nem a própria. `/api/checkins` devolvia hoje o paciente inteiro com `clinicalNotes` para quem tem papel de paciente; aqui a linha não aparece.
+- Profissional passa a ver **apenas o próprio cadastro**. Isso corrige um bug real: `professionalUser()` no frontend é `professionals()[0]`, então hoje uma sessão do profissional #2 grava o nome do #1 em `reviewedBy`, no autor da nota e no chat. O painel administrativo continua vendo todos, por ser papel `admin`.
 
 Detalhes que a normalização teve de preservar, porque o frontend depende deles:
 
@@ -138,4 +161,4 @@ npm run build
 
 ## Escopo
 
-Esta versão é demonstrativa. A API exige autenticação por token, senha com `scrypt` e limite de tentativas por IP e por conta, mas ainda faltam criptografia em repouso, trilha de auditoria, renovação de token e o acesso por registro via RLS, que está em preparação. Nada disso deve ser usado com dados reais de pacientes.
+Esta versão é demonstrativa. A API exige autenticação por token, senha com `scrypt` e limite de tentativas por IP e por conta; o banco tem acesso por registro via RLS, mas ainda faltam criptografia em repouso, trilha de auditoria e renovação de token, e o servidor ainda não consulta o Postgres. Nada disso deve ser usado com dados reais de pacientes.

@@ -1,13 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
+import { asAdmin, createMigrationPool } from './session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const stateFile = process.env.VIVACE_IMPORT_FILE ?? join(root, '.data', 'vivace-state.json');
-const connectionString = process.env.MIGRATION_DATABASE_URL
-  ?? process.env.DATABASE_URL
-  ?? 'postgres://vivace:vivace@127.0.0.1:55432/vivace';
 const force = process.argv.includes('--force');
 
 const normalize = value => String(value ?? '')
@@ -65,31 +62,41 @@ const childTables = [
   'clinical_notes'
 ];
 
+// O hash vive em account_credentials, isolado das tabelas clinicas: e o unico
+// jeito de o servidor ler, via app_lookup_account.
+const storeCredentials = async (client, accountId, role, password) => {
+  if (!isHashed(password)) return;
+  await client.query(
+    `INSERT INTO account_credentials (account_id, role, password_hash) VALUES ($1, $2, $3)
+     ON CONFLICT (account_id) DO UPDATE SET password_hash = EXCLUDED.password_hash, role = EXCLUDED.role`,
+    [accountId, role, password]
+  );
+};
+
 const insertCollections = async (client, state, warnings) => {
   const professionals = state.professionals ?? [];
   for (const [index, professional] of professionals.entries()) {
     await client.query(
-      `INSERT INTO professionals (id, name, job_title, crm_coren, avatar, email, password_hash, specialty, position)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO professionals (id, name, job_title, crm_coren, avatar, email, specialty, position)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (id) DO UPDATE SET
          name = EXCLUDED.name, job_title = EXCLUDED.job_title, crm_coren = EXCLUDED.crm_coren,
          avatar = EXCLUDED.avatar, email = EXCLUDED.email, specialty = EXCLUDED.specialty,
-         position = EXCLUDED.position,
-         password_hash = COALESCE(EXCLUDED.password_hash, professionals.password_hash)`,
+         position = EXCLUDED.position`,
       [professional.id, professional.name, professional.role ?? '', professional.crmCoren ?? '',
-        professional.avatar ?? '', professional.email, isHashed(professional.password) ? professional.password : null,
-        professional.specialty ?? '', index]
+        professional.avatar ?? '', professional.email, professional.specialty ?? '', index]
     );
+    await storeCredentials(client, professional.id, 'professional', professional.password);
   }
 
   for (const [index, admin] of (state.admins ?? []).entries()) {
     await client.query(
-      `INSERT INTO admins (id, name, email, password_hash, position) VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO admins (id, name, email, position) VALUES ($1,$2,$3,$4)
        ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name, email = EXCLUDED.email, position = EXCLUDED.position,
-         password_hash = COALESCE(EXCLUDED.password_hash, admins.password_hash)`,
-      [admin.id, admin.name, admin.email, isHashed(admin.password) ? admin.password : null, index]
+         name = EXCLUDED.name, email = EXCLUDED.email, position = EXCLUDED.position`,
+      [admin.id, admin.name, admin.email, index]
     );
+    await storeCredentials(client, admin.id, 'admin', admin.password);
   }
 
   let orphanSurgeons = 0;
@@ -97,14 +104,14 @@ const insertCollections = async (client, state, warnings) => {
     const contact = patient.emergencyContact ?? {};
     await client.query(
       `INSERT INTO patients (
-         id, name, age, gender, avatar, email, password_hash, phone, cpf, procedure,
+         id, name, age, gender, avatar, email, phone, cpf, procedure,
          surgery_date, discharge_date, hospital, anesthesia_type, allergies, status,
          post_op_day, last_check_in_time, current_pain, current_temp, blood_pressure, heart_rate,
          wound_review_pending, medication_adherence_percent,
          emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, position, surgeon_label)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29)`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)`,
       [patient.id, patient.name, patient.age ?? 0, patient.gender ?? '', patient.avatar ?? '',
-        patient.email, isHashed(patient.password) ? patient.password : null,
+        patient.email,
         patient.phone ?? '', patient.cpf ?? '', patient.procedure ?? '',
         patient.surgeryDate ?? '', patient.dischargeDate ?? '', patient.hospital ?? '',
         patient.anesthesiaType ?? '', patient.allergies ?? [], patient.status ?? 'estavel',
@@ -115,6 +122,7 @@ const insertCollections = async (client, state, warnings) => {
         contact.name ?? '', contact.phone ?? '', contact.relationship ?? '', index,
         patient.surgeon ?? '']
     );
+    await storeCredentials(client, patient.id, 'patient', patient.password);
 
     const surgeon = resolveProfessional(patient.surgeon, professionals);
     if (surgeon) {
@@ -215,29 +223,31 @@ const insertCollections = async (client, state, warnings) => {
 
 const main = async () => {
   const state = JSON.parse(await readFile(stateFile, 'utf8'));
-  const client = new pg.Client({ connectionString });
-  await client.connect();
+  // O import roda com privilegio de dono (precisa de TRUNCATE) e sob um
+  // contexto admin explicito: com FORCE ROW LEVEL SECURITY as policies valem
+  // inclusive para quem possui a tabela, entao escrever sem identidade seria
+  // barrado pelo WITH CHECK.
+  const pool = createMigrationPool();
   const warnings = [];
   try {
-    await client.query('BEGIN');
-    const existing = await client.query('SELECT count(*)::int AS total FROM patients');
-    if (existing.rows[0].total > 0 && !force) {
-      throw new Error(
-        `patients ja tem ${existing.rows[0].total} linha(s). O import trunca e reinsere; ` +
-        'rode com --force se isso for de proposito.'
-      );
-    }
-    await client.query(`TRUNCATE ${childTables.join(', ')} RESTART IDENTITY CASCADE`);
-    await client.query('TRUNCATE patients, patient_care_team, professionals, admins RESTART IDENTITY CASCADE');
-    await insertCollections(client, state, warnings);
-    await client.query('COMMIT');
+    await asAdmin(pool, async client => {
+      const existing = await client.query('SELECT count(*)::int AS total FROM patients');
+      if (existing.rows[0].total > 0 && !force) {
+        throw new Error(
+          `patients ja tem ${existing.rows[0].total} linha(s). O import trunca e reinsere; ` +
+          'rode com --force se isso for de proposito.'
+        );
+      }
+      await client.query(`TRUNCATE ${childTables.join(', ')} RESTART IDENTITY CASCADE`);
+      await client.query('TRUNCATE account_credentials, patients, patient_care_team, professionals, admins RESTART IDENTITY CASCADE');
+      await insertCollections(client, state, warnings);
+    });
   } catch (error) {
-    await client.query('ROLLBACK');
     console.error(`import falhou: ${error.message}`);
     process.exitCode = 1;
     return;
   } finally {
-    await client.end();
+    await pool.end();
   }
 
   const summary = {

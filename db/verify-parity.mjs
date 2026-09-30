@@ -5,14 +5,11 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import pg from 'pg';
 import { readAggregate } from './aggregate.mjs';
+import { asAdmin, createMigrationPool } from './session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const stateFile = process.env.VIVACE_IMPORT_FILE ?? join(root, '.data', 'vivace-state.json');
-const connectionString = process.env.MIGRATION_DATABASE_URL
-  ?? process.env.DATABASE_URL
-  ?? 'postgres://vivace:vivace@127.0.0.1:55432/vivace';
 const maxReported = 25;
 
 // O hash de senha nunca volta na API (server.mjs remove antes de responder), e
@@ -100,13 +97,14 @@ const compare = (expected, actual, path) => {
 
 const main = async () => {
   const source = JSON.parse(await readFile(stateFile, 'utf8'));
-  const client = new pg.Client({ connectionString });
-  await client.connect();
+  // Sob contexto admin: o RLS vale ate para o dono da tabela, entao uma leitura
+  // sem identidade veria zero pacientes.
+  const pool = createMigrationPool();
   let actual;
   try {
-    actual = await readAggregate(client);
+    actual = await asAdmin(pool, client => readAggregate(client));
   } finally {
-    await client.end();
+    await pool.end();
   }
 
   const expected = {

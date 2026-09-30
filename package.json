@@ -12,7 +12,8 @@
     "db:cluster": "node db/dev-cluster.mjs start",
     "db:migrate": "node db/migrate.mjs",
     "db:import": "node db/import-from-json.mjs",
-    "db:verify": "node db/verify-parity.mjs"
+    "db:verify": "node db/verify-parity.mjs",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "@angular/aria": "21.2.14",
