@@ -101,7 +101,10 @@ export class PatientPortalComponent {
       this.finishSavingCheckIn(saved);
       return;
     }
-    if (this.photoUrl()) void this.vivace.uploadWoundPhoto(patient.id, this.photoUrl(), this.photoNotes || this.notes);
+    const photo = this.photoUrl()
+      ? { imageUrl: this.photoUrl(), patientNotes: this.photoNotes || this.notes }
+      : undefined;
+    if (photo && this.vivace.currentRole() !== 'patient') void this.vivace.uploadWoundPhoto(patient.id, photo.imageUrl, photo.patientNotes);
     const saved = await this.vivace.submitDailyCheckIn(patient.id, {
       date: new Date().toLocaleDateString('pt-BR'),
       dayLabel: `D+${patient.postOpDay}`,
@@ -112,7 +115,7 @@ export class PatientPortalComponent {
       notes: this.notes,
       mood: this.mood,
       photoUploaded: Boolean(this.photoUrl())
-    });
+    }, photo);
     this.finishSavingCheckIn(saved);
   }
 

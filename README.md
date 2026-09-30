@@ -10,6 +10,7 @@ Plataforma Angular para acompanhamento pós-operatório, com experiências separ
 - Highcharts Angular para evolução de dor e temperatura
 - TypeScript em modo estrito
 - Tailwind CSS 4
+- API Node com autenticação por token, senhas em `scrypt` e permissões por papel
 - Persistência demonstrativa compartilhada na rede local, com contingência em `localStorage`
 
 ## Funcionalidades
@@ -17,6 +18,7 @@ Plataforma Angular para acompanhamento pós-operatório, com experiências separ
 - Painel profissional com triagem, alertas e prontuário clínico
 - Portal do paciente com check-in, medicamentos, mensagens e envio de fotos
 - Painel administrativo com CRUD de profissionais e pacientes
+- Login com sessão por token e permissões distintas para cada perfil
 - Layout responsivo para desktop e dispositivos móveis
 
 ## Executar
@@ -50,6 +52,9 @@ VIVACE_FRONTEND_PORT=4321 VIVACE_API_PORT=4001 npm run dev
 - `VIVACE_API_PORT`: porta da API de persistência (padrão `3001`)
 - `VIVACE_DATA_DIRECTORY`: pasta dos dados compartilhados (padrão `.data/`)
 - `VIVACE_SKIP_FRONTEND=true`: inicia apenas a API
+- `VIVACE_SESSION_TTL_MS`: validade da sessão em milissegundos (padrão `28800000`, 8 horas)
+- `VIVACE_BOOTSTRAP_EMAIL` / `VIVACE_BOOTSTRAP_PASSWORD`: credenciais do administrador inicial (padrão `admin@vivace.med.br` / `vivace-demo`)
+- `VIVACE_ALLOWED_ORIGINS`: origens extras liberadas no CORS, separadas por vírgula
 
 Verifique se as portas estão livres antes de iniciar:
 
@@ -58,6 +63,30 @@ ss -tln | grep -E ':(3000|3001)'
 ```
 
 Se a `VIVACE_API_PORT` estiver ocupada por outro servidor, o check-in no celular vai exibir "não foi sincronizado": o frontend cai no servidor alheio, que responde 404 em `/api/state`, e o salvamento é descartado. Use outra porta em `VIVACE_API_PORT`.
+
+## Autenticação e API
+
+Toda rota exige um token de sessão (`Authorization: Bearer <token>`), emitido por `POST /api/auth/login` com usuário e senha. A senha é comparada com `scrypt` e nunca trafega nem é devolvida pela API.
+
+| Rota | Profissional | Paciente |
+| --- | --- | --- |
+| `POST /api/auth/login` | público | público |
+| `GET /api/state` | todos os pacientes | apenas o próprio registro, sem notas clínicas |
+| `PUT /api/state` | permitido | `403` |
+| `POST /api/messages` | envia como `equipe` | envia como `paciente`, apenas para si mesmo |
+| `GET /api/events` | eventos de todos | apenas os próprios eventos |
+
+O remetente da mensagem é definido pelo servidor conforme o papel do token, então um paciente não consegue se passar pela equipe. O CORS só responde à própria origem do frontend.
+
+Contas de demonstração (senha `vivace-demo`):
+
+| Perfil | Usuário |
+| --- | --- |
+| Profissional | `Rafaely Carvalho` ou `rafaely.carvalho@vivace.med.br` |
+| Paciente | `mariana` ou `mariana.souza@email.com` |
+| Administração | `admin@vivace.med.br` |
+
+No primeiro acesso a API cria a conta de administração inicial. Ao entrar como administrador, todas as senhas ainda em texto plano da base são convertidas para `scrypt`.
 
 ## Validar
 
@@ -68,4 +97,4 @@ npm run build
 
 ## Escopo
 
-Esta versão é demonstrativa. Autenticação, criptografia, notificações e armazenamento clínico em servidor ainda precisam ser implementados antes de qualquer uso com dados reais de pacientes.
+Esta versão é demonstrativa. A API exige autenticação por token e senha com `scrypt`, mas ainda faltam criptografia em repouso, trilha de auditoria, renovação de token, limite de tentativas de login e um banco de dados com controle de acesso por registro. Nada disso deve ser usado com dados reais de pacientes.

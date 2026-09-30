@@ -44,6 +44,9 @@
         <input type="checkbox" [formField]="loginForm.rememberMe" class="accent-[#134E4A]" />
         Lembrar neste dispositivo
       </label>
+      @if (loginError()) {
+        <p role="alert" class="rounded-2xl border border-[#F5C6BC] bg-[#FFF1ED] px-4 py-3 text-xs font-medium text-[#C2412D]">{{ loginError() }}</p>
+      }
       <button type="submit" [disabled]="loginForm().submitting()" class="w-full py-3 bg-[#134E4A] hover:bg-[#0f3d3a] disabled:opacity-60 text-white text-sm font-bold rounded-2xl shadow-md transition-colors">
         {{ loginForm().submitting() ? 'Entrando...' : tab() === 'professional' ? 'Acessar Painel Cirúrgico' : tab() === 'patient' ? 'Acessar Meu Pós-Operatório' : 'Acessar Painel de Cadastros' }}
       </button>

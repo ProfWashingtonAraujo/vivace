@@ -1,4 +1,11 @@
-import { Patient, ProfessionalUser } from '../types';
+import { AdminUser, Patient, ProfessionalUser } from '../types';
+
+export const CURRENT_ADMIN: AdminUser = {
+  id: 'adm-1',
+  name: 'Administrador',
+  email: 'admin@vivace.med.br',
+  password: 'vivace-demo'
+};
 
 export const CURRENT_PROFESSIONAL: ProfessionalUser = {
   id: 'prof-1',

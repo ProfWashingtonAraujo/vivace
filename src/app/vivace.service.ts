@@ -1,6 +1,6 @@
 import { Injectable, computed, effect, signal } from '@angular/core';
-import { CURRENT_PROFESSIONAL, INITIAL_PATIENTS } from '../data/mockData';
-import { AlertSeverity, ChatMessage, DailyCheckIn, MedicationItem, Patient, PostOpInstruction, ProfessionalUser, UserRole, WoundPhoto } from '../types';
+import { CURRENT_ADMIN, CURRENT_PROFESSIONAL, INITIAL_PATIENTS } from '../data/mockData';
+import { AdminUser, AlertSeverity, ChatMessage, DailyCheckIn, MedicationItem, Patient, PostOpInstruction, ProfessionalUser, UserRole, WoundPhoto } from '../types';
 
 const STORAGE_KEY = 'vivace_patients_v2';
 const PROFESSIONALS_STORAGE_KEY = 'vivace_professionals_v1';
@@ -16,6 +16,13 @@ const apiPort = (): string =>
 interface StoredSession {
   role: UserRole;
   patientId: string;
+  token: string;
+  name: string;
+}
+
+export interface LoginResult {
+  ok: boolean;
+  message: string;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -23,16 +30,20 @@ export class VivaceService {
   private readonly storedSession = this.loadSession();
   private readonly patientsState = signal<Patient[]>(this.loadPatients());
   private readonly professionalsState = signal<ProfessionalUser[]>(this.loadProfessionals());
+  private readonly adminsState = signal<AdminUser[]>([structuredClone(CURRENT_ADMIN)]);
   private saveQueue = Promise.resolve();
   private pendingSaves = 0;
   private stateRevision = 0;
   private hasUnsavedChanges = this.loadSyncPending();
+  private token = this.storedSession?.token ?? '';
 
   readonly patients = this.patientsState.asReadonly();
   readonly professionals = this.professionalsState.asReadonly();
-  readonly activePatientId = signal(this.storedSession?.patientId ?? 'pat-1');
+  readonly admins = this.adminsState.asReadonly();
+  readonly activePatientId = signal(this.storedSession?.role === 'patient' ? this.storedSession.patientId : 'pat-1');
   readonly currentRole = signal<UserRole>(this.storedSession?.role ?? 'professional');
   readonly isLoggedIn = signal(this.storedSession !== null);
+  readonly sessionName = signal(this.storedSession?.name ?? '');
   readonly professionalUser = computed(() => this.professionals()[0] ?? CURRENT_PROFESSIONAL);
   readonly selectedPatient = computed(() =>
     this.patients().find(patient => patient.id === this.activePatientId()) ?? this.patients()[0]
@@ -48,7 +59,7 @@ export class VivaceService {
       }
     });
     void this.loadSharedState();
-    this.listenForMessages();
+    if (this.token) this.listenForMessages();
     window.setInterval(() => void this.loadSharedState(false), SYNC_INTERVAL_MS);
     effect(() => {
       try {
@@ -59,20 +70,50 @@ export class VivaceService {
     });
   }
 
-  loginAs(role: UserRole, patientId?: string, rememberMe = false): void {
-    this.currentRole.set(role);
-    if (patientId) this.activePatientId.set(patientId);
-    this.isLoggedIn.set(true);
-    this.saveSession(rememberMe);
+  async login(username: string, password: string, rememberMe = false): Promise<LoginResult> {
+    try {
+      const response = await fetch(this.apiUrl('/api/auth/login'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const result = await response.json().catch(() => ({})) as { token?: string; role?: UserRole; patientId?: string | null; name?: string; error?: string };
+      if (!response.ok || !result.token || !result.role) {
+        return { ok: false, message: result.error ?? 'Não foi possível entrar. Verifique a conexão e tente novamente.' };
+      }
+      this.token = result.token;
+      this.currentRole.set(result.role);
+      if (result.patientId) this.activePatientId.set(result.patientId);
+      this.sessionName.set(result.name ?? '');
+      this.isLoggedIn.set(true);
+      this.saveSession(rememberMe);
+      this.listenForMessages();
+      await this.loadSharedState();
+      return { ok: true, message: '' };
+    } catch {
+      return { ok: false, message: 'API indisponível. Confirme se o servidor está rodando na mesma rede.' };
+    }
   }
 
-  logout(): void {
+  async logout(): Promise<void> {
+    const token = this.token;
+    this.token = '';
     this.isLoggedIn.set(false);
+    this.sessionName.set('');
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       sessionStorage.removeItem(SESSION_STORAGE_KEY);
     } catch {
       // The demo remains usable when browser storage is unavailable.
+    }
+    if (!token) return;
+    try {
+      await fetch(this.apiUrl('/api/auth/logout'), {
+        method: 'POST',
+        headers: this.authHeaders()
+      });
+    } catch {
+      // The session is already discarded locally.
     }
   }
 
@@ -83,6 +124,7 @@ export class VivaceService {
   resetToDefaults(): void {
     this.patientsState.set(structuredClone(INITIAL_PATIENTS));
     this.professionalsState.set([structuredClone(CURRENT_PROFESSIONAL)]);
+    this.adminsState.set([structuredClone(CURRENT_ADMIN)]);
     this.activePatientId.set('pat-1');
     localStorage.removeItem(STORAGE_KEY);
     localStorage.removeItem(PROFESSIONALS_STORAGE_KEY);
@@ -182,7 +224,8 @@ export class VivaceService {
     return true;
   }
 
-  submitDailyCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>): Promise<boolean> {
+  submitDailyCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>, photo?: { imageUrl: string; patientNotes?: string }): Promise<boolean> {
+    if (this.currentRole() === 'patient') return this.sendPatientCheckIn(patientId, data, photo);
     return this.updatePatient(patientId, patient => {
       const now = new Date();
       const status: AlertSeverity = data.painLevel >= 7 || data.temperature >= 37.8
@@ -212,7 +255,64 @@ export class VivaceService {
     });
   }
 
+  private async sendPatientCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>, photo?: { imageUrl: string; patientNotes?: string }): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const response = await this.authFetch(this.apiUrl('/api/checkins'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: `chk-${Date.now()}`,
+          patientId,
+          checkIn: data,
+          photo: photo ? { id: `wp-${Date.now()}`, imageUrl: photo.imageUrl, patientNotes: photo.patientNotes } : undefined
+        })
+      });
+      if (response.status === 401) {
+        await this.handleUnauthorized();
+        return false;
+      }
+      if (!response.ok) return false;
+      const result = await response.json() as { patient: Patient };
+      this.mergePatient(result.patient);
+      this.hasUnsavedChanges = false;
+      this.storeSyncPending(false);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private mergePatient(patient: Patient): void {
+    this.patientsState.update(patients => patients.map(item => item.id === patient.id ? patient : item));
+  }
+
+  private async confirmDoseAsPatient(patientId: string, medicationId: string, time: string): Promise<boolean> {
+    if (!this.token) return false;
+    try {
+      const response = await this.authFetch(this.apiUrl('/api/medication-taken'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patientId, medicationId, time })
+      });
+      if (response.status === 401) {
+        await this.handleUnauthorized();
+        return false;
+      }
+      if (!response.ok) return false;
+      const result = await response.json() as { patient: Patient };
+      this.mergePatient(result.patient);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   toggleMedicationTaken(patientId: string, medicationId: string, time: string): void {
+    if (this.currentRole() === 'patient') {
+      void this.confirmDoseAsPatient(patientId, medicationId, time);
+      return;
+    }
     this.updatePatient(patientId, patient => {
       const medications = patient.medications.map(medication => medication.id === medicationId
         ? { ...medication, takenToday: { ...medication.takenToday, [time]: !medication.takenToday[time] } }
@@ -334,7 +434,8 @@ export class VivaceService {
   async sendMessage(patientId: string, text: string, sender: ChatMessage['sender']): Promise<boolean> {
     const messageText = text.trim();
     const patient = this.patients().find(item => item.id === patientId);
-    if (!messageText || !patient) return false;
+    if (!messageText || !patient || !this.token) return false;
+    if (this.currentRole() === 'patient' && patientId !== this.activePatientId()) return false;
     const message: ChatMessage = {
       id: `msg-${crypto.randomUUID()}`,
       sender,
@@ -345,7 +446,7 @@ export class VivaceService {
     };
     this.mergeChatMessage(patientId, message);
     try {
-      const response = await fetch(this.apiUrl('/api/messages'), {
+      const response = await this.authFetch(this.apiUrl('/api/messages'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -356,6 +457,10 @@ export class VivaceService {
           clientMessageId: message.id
         })
       });
+      if (response.status === 401) {
+        await this.handleUnauthorized();
+        throw new Error('Session expired');
+      }
       if (!response.ok) throw new Error('Message not saved');
       const result = await response.json() as { message: ChatMessage };
       this.mergeChatMessage(patientId, result.message);
@@ -407,19 +512,23 @@ export class VivaceService {
   }
 
   private async loadSharedState(initialize = true): Promise<void> {
-    if (this.pendingSaves > 0) return;
+    if (!this.token || this.pendingSaves > 0) return;
     if (this.hasUnsavedChanges) {
       await this.saveSharedState();
       return;
     }
     try {
-      const response = await fetch(this.apiUrl());
+      const response = await this.authFetch(this.apiUrl());
+      if (response.status === 401) {
+        await this.handleUnauthorized();
+        return;
+      }
       if (response.status === 204) {
         if (initialize) await this.saveSharedState();
         return;
       }
       if (!response.ok) return;
-      const state = await response.json() as { patients?: Patient[]; professionals?: ProfessionalUser[] };
+      const state = await response.json() as { patients?: Patient[]; professionals?: ProfessionalUser[]; admins?: AdminUser[] };
       const professional = state.professionals?.[0] ?? this.professionalUser();
       const patients = state.patients
         ? this.assignPrimaryProfessional(state.patients.map(patient => this.normalizePatient(patient)), professional)
@@ -427,8 +536,11 @@ export class VivaceService {
       if (Array.isArray(patients) && JSON.stringify(patients) !== JSON.stringify(this.patients())) {
         this.patientsState.set(patients);
       }
-      if (Array.isArray(state.professionals) && JSON.stringify(state.professionals) !== JSON.stringify(this.professionals())) {
+      if (Array.isArray(state.professionals) && state.professionals.length && JSON.stringify(state.professionals) !== JSON.stringify(this.professionals())) {
         this.professionalsState.set(state.professionals);
+      }
+      if (Array.isArray(state.admins) && state.admins.length && JSON.stringify(state.admins) !== JSON.stringify(this.admins())) {
+        this.adminsState.set(state.admins);
       }
     } catch {
       // Local storage keeps the application available when the shared API is offline.
@@ -436,6 +548,7 @@ export class VivaceService {
   }
 
   private saveSharedState(): Promise<boolean> {
+    if (!this.token || this.currentRole() === 'patient') return Promise.resolve(false);
     this.stateRevision++;
     this.hasUnsavedChanges = true;
     this.storeSyncPending(true);
@@ -443,11 +556,20 @@ export class VivaceService {
     const operation = this.saveQueue.then(async () => {
       const revision = this.stateRevision;
       try {
-        const response = await fetch(this.apiUrl(), {
+        const response = await this.authFetch(this.apiUrl(), {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ patients: this.patients(), professionals: this.professionals() })
+          body: JSON.stringify({
+            patients: this.patients(),
+            professionals: this.professionals(),
+            admins: this.admins()
+          })
         });
+        if (response.status === 401) {
+          await this.handleUnauthorized();
+          return false;
+        }
+        if (response.status === 403) return false;
         if (!response.ok) return false;
         if (this.stateRevision === revision) {
           this.hasUnsavedChanges = false;
@@ -464,12 +586,28 @@ export class VivaceService {
     return operation;
   }
 
+  private async handleUnauthorized(): Promise<void> {
+    this.storeSyncPending(false);
+    await this.logout();
+  }
+
   private apiUrl(path = '/api/state'): string {
     return `${location.protocol}//${location.hostname}:${apiPort()}${path}`;
   }
 
+  private authHeaders(): Record<string, string> {
+    return this.token ? { Authorization: `Bearer ${this.token}` } : {};
+  }
+
+  private async authFetch(url: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    for (const [name, value] of Object.entries(this.authHeaders())) headers.set(name, value);
+    return fetch(url, { ...init, headers });
+  }
+
   private listenForMessages(): void {
-    const events = new EventSource(this.apiUrl('/api/events'));
+    const separator = this.apiUrl('/api/events').includes('?') ? '&' : '?';
+    const events = new EventSource(`${this.apiUrl('/api/events')}${separator}token=${encodeURIComponent(this.token)}`);
     events.onmessage = event => {
       try {
         const payload = JSON.parse(event.data) as { type?: string; patientId?: string; message?: ChatMessage };
@@ -521,6 +659,7 @@ export class VivaceService {
       if (!['professional', 'patient', 'admin'].includes(session.role) || typeof session.patientId !== 'string') {
         return null;
       }
+      if (typeof session.token !== 'string' || !session.token) return null;
       return session;
     } catch {
       return null;
@@ -561,7 +700,9 @@ export class VivaceService {
       const otherStorage = rememberMe ? sessionStorage : localStorage;
       storage.setItem(SESSION_STORAGE_KEY, JSON.stringify({
         role: this.currentRole(),
-        patientId: this.activePatientId()
+        patientId: this.activePatientId(),
+        token: this.token,
+        name: this.sessionName()
       } satisfies StoredSession));
       otherStorage.removeItem(SESSION_STORAGE_KEY);
     } catch {
