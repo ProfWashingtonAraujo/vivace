@@ -54,6 +54,14 @@ const verifyPassword = async (password, stored) => {
 
 const isHashed = value => typeof value === 'string' && value.startsWith('scrypt$');
 
+const decoySalt = 'vivace-login-decoy';
+
+// Gasta o mesmo tempo de scrypt quando não há hash para comparar, para que o
+// tempo de resposta não revele se o usuário existe.
+const burnScrypt = async password => {
+  await scrypt(password, decoySalt);
+};
+
 const createSession = (account) => {
   const token = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
   sessions.set(token, { ...account, expiresAt: Date.now() + sessionTtlMs });
@@ -443,7 +451,16 @@ const api = createServer(async (request, response) => {
         console.log('Conta de administrador inicial criada em', dataFile);
       }
       const account = findAccount(state, identifier);
-      if (!account || !(await verifyPassword(password, account.password))) {
+      if (!account) {
+        await burnScrypt(password);
+        recordLoginFailure(request, identifier);
+        json(request, response, 401, { error: 'Usuário ou senha inválidos' });
+        return;
+      }
+      const hashed = isHashed(account.password);
+      const valid = await verifyPassword(password, account.password);
+      if (!hashed) await burnScrypt(password);
+      if (!valid) {
         recordLoginFailure(request, identifier);
         json(request, response, 401, { error: 'Usuário ou senha inválidos' });
         return;

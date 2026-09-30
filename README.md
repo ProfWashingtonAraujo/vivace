@@ -94,6 +94,10 @@ O `POST /api/auth/login` conta as falhas por endereço IP e por conta, separadam
 
 Limitar pela conta impede que a força bruta distribuída por vários endereços passe, mas também permite que alguém tranque o acesso de um usuário legítimo com `VIVACE_LOGIN_MAX_ATTEMPTS` tentativas. Como os contadores ficam em memória, um reinício da API libera todo mundo; em produção, o desbloqueio precisa vir de um banco com registro das tentativas.
 
+### Tempo de resposta do login
+
+A resposta é a mesma (`401`, "Usuário ou senha inválidos") exista ou não a conta, e o servidor gasta o mesmo tempo nos dois casos: quando o usuário não existe, ou quando a senha ainda está em texto plano, roda um `scrypt` de descarte para compensar o `scrypt` que a verificação real não faria. Sem isso, um usuário inexistente responderia em milissegundos e o `scrypt` levaria dezenas, o que permite enumerar quem tem cadastro medindo a latência.
+
 ## Validar
 
 ```bash
