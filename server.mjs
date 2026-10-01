@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -62,14 +62,11 @@ const sessionTokenFromUrl = url => new URL(url, 'http://localhost').searchParams
 // ?token= na URL. Ler dos dois aqui evita que cada rota repita o par.
 const requestToken = request => bearerToken(request) || sessionTokenFromUrl(request.url);
 
-// Assíncrono porque a sessão está no Postgres, e o que volta já vem filtrado
-// por expires_at: se o token não existe ou venceu, findSession devolve null e não
-// há expiresAt para o Node conferir. A expiração é absoluta, então este caminho
-// não escreve nada.
-const authenticate = async request => {
-  const token = requestToken(request);
-  return token ? store.findSession(token) : null;
-};
+// Mesmo resumo que o store grava em sessions, para que o contador de requisições
+// por sessão não vire um segundo lugar onde o token fica em claro. Não é
+// autenticação: aqui só precisa separar uma sessão de outra. Truncado em 32
+// caracteres porque só precisa ser único entre sessões, não ser um resumo fiel.
+const tokenFingerprint = token => createHash('sha256').update(token).digest('hex').slice(0, 32);
 
 const clientAddress = request => {
   const forwarded = request.headers['x-forwarded-for'];
@@ -105,17 +102,34 @@ const sweepAuth = () => {
 
 setInterval(sweepAuth, loginWindowMs).unref();
 
+// Comparação de origem por string inteira, com scheme, host E porta. A versão
+// anterior aceitava a porta que quisesse, porque comparava só o hostname: em
+// desenvolvimento isso é inofensivo, e o mesmo código em produção liberaria
+// qualquer porta do domínio real. Um atacante que sirva a página em
+// `http://localhost:9999` — ou em qualquer porta do seu domínio — passaria na
+// verificação e leria a resposta da API.
+//
+// A lista é a fonte da verdade: o próprio frontend nas portas que ele atende, mais
+// o que vier em VIVACE_ALLOWED_ORIGINS. Nada é derivado do cabeçalho Host do
+// pedido, porque Host é controlado por quem faz a requisição.
+const originAllowed = new Set([
+  ...extraOrigins,
+  `http://localhost:${frontendPort}`,
+  `http://127.0.0.1:${frontendPort}`,
+  // O acesso pela rede local é o caso de uso do celular no endereço da máquina,
+  // e o IP muda conforme a rede. Aceitar o IP da própria máquina na porta do
+  // frontend é o que faz o check-in no celular funcionar sem configurar origem a
+  // cada mudança de rede. Só os endereços que esta máquina tem agora: a lista é
+  // montada no boot, e mudar de rede exige reiniciar, que é o mesmo que já
+  // acontecia com o resto do servidor.
+  ...Object.values(networkInterfaces()).flatMap(addresses => addresses ?? [])
+    .filter(address => address.family === 'IPv4' && !address.internal)
+    .map(address => `http://${address.address}:${frontendPort}`)
+]);
+
 const allowedOrigin = request => {
   const origin = request.headers.origin;
-  if (!origin) return null;
-  if (extraOrigins.includes(origin)) return origin;
-  try {
-    const { hostname } = new URL(origin);
-    const host = (request.headers.host ?? '').split(':')[0];
-    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === host ? origin : null;
-  } catch {
-    return null;
-  }
+  return origin && originAllowed.has(origin) ? origin : null;
 };
 
 const json = (request, response, status, value, extraHeaders = {}) => {
@@ -177,6 +191,98 @@ const publish = event => {
   }
 };
 
+// ------------------------------------------------- limite de requisicoes
+//
+// O bloqueio do login nao protege o resto: um token valido, mesmo vazado, fazia
+// GET /api/state e PUT /api/state sem limite nenhum, e o PUT reescreve o prontuario
+// inteiro. O limite e por sessao E por IP.
+//
+// A janela e fixa, nao deslizante, e a contagem e um contador simples. Isso e
+// suficiente para abuso e e o que nao custa escrita: a sessao mora no Postgres, mas
+// o contador fica em memoria, entao o limite e por processo e nao sobrevive a um
+// restart -- resetar o limite e o mesmo preco de reiniciar a API, que e o que se
+// aceita aqui. Um limite distribuido de verdade exigiria uma escrita por requisicao,
+// e é o caminho quente que a 011 acabou de nao tocar.
+//
+// A chave de sessao e o hash do token, nunca o token: o contador nao pode virar um
+// segundo lugar onde a credencial fica em claro.
+
+const rateWindowMs = Math.max(1, Number(process.env.VIVACE_RATE_WINDOW_MS ?? 60_000));
+const rateSessionMax = Math.max(1, Number(process.env.VIVACE_RATE_SESSION_MAX ?? 120));
+const rateIpMax = Math.max(1, Number(process.env.VIVACE_RATE_IP_MAX ?? 300));
+const rateCounters = new Map();
+
+const rateKey = (prefix, value) => `${prefix}:${value}`;
+
+// Janela fixa: a contagem zera no primeiro REQUEST depois de uma janela inteira.
+// Um contador deslizante daria limite mais justo no limite da rajada, ao preco de
+// guardar o historico de cada chave.
+const rateExceeded = (key, max) => {
+  const now = Date.now();
+  const counter = rateCounters.get(key);
+  if (!counter || counter.resetAt <= now) {
+    rateCounters.set(key, { count: 1, resetAt: now + rateWindowMs });
+    return 0;
+  }
+  counter.count += 1;
+  return counter.count > max ? counter.resetAt - now : 0;
+};
+
+// Substitui sweepLoginAttempts no lugar: um timer que apaga o que já passou da
+// janela, em vez de varrer a estrutura a cada pedido.
+const sweepRateCounters = () => {
+  const now = Date.now();
+  for (const [key, counter] of rateCounters) {
+    if (counter.resetAt <= now) rateCounters.delete(key);
+  }
+};
+
+setInterval(sweepRateCounters, rateWindowMs).unref();
+
+// O limite por IP vale para TODA rota, inclusive o login. O bloqueio por tentativas
+// do login só conta falhas: um flood de senhas erradas para de gastar scrypt depois
+// de VIVACE_LOGIN_MAX_ATTEMPTS, mas um flood de senhas certas -- ou de requisições
+// malformadas, que nem chegam a comparar senha -- continuaria comprando scrypt sem
+// limite, e cada scrypt é ~100ms de CPU.
+//
+// O OPTIONS é a única exceção: é o preflight do CORS, que o navegador manda sozinho e
+// que não deveria gastar cota de ninguém.
+const rateLimitIp = (request, response) => {
+  const retryAfter = rateExceeded(rateKey('ip', clientAddress(request)), rateIpMax);
+  if (retryAfter <= 0) return false;
+  console.log(`Rate limit de IP estourado (${clientAddress(request)}), ${rateIpMax} por ${rateWindowMs}ms`);
+  json(request, response, 429, {
+    error: `Muitas requisições. Tente novamente em ${humanizeWait(retryAfter)}.`
+  }, { 'Retry-After': String(Math.ceil(retryAfter / 1000)) });
+  return true;
+};
+
+// Autentica e cobra o limite por sessão, nessa ordem: um token inválido não gasta
+// cota, e responder 401 antes de consultar o banco é o caminho mais barato de
+// responder. Devolve null quando já respondeu, para o chamador só precisar do
+// `return`.
+//
+// A chave do limite por sessão é o token apresentado, e não o userId: assim um token
+// descartado e reapresentado recomeça a contagem, em vez de deburdenar a sessão que
+// ele finje ser.
+const authorize = async (request, response) => {
+  const token = requestToken(request);
+  const session = token ? await store.findSession(token) : null;
+  if (!session) {
+    unauthorized(request, response);
+    return null;
+  }
+  const retryAfter = rateExceeded(rateKey('sess', tokenFingerprint(token)), rateSessionMax);
+  if (retryAfter > 0) {
+    console.log(`Rate limit de sessão estourado para ${session.userId} (${session.role}), ${rateSessionMax} por ${rateWindowMs}ms`);
+    json(request, response, 429, {
+      error: `Muitas requisições. Tente novamente em ${humanizeWait(retryAfter)}.`
+    }, { 'Retry-After': String(Math.ceil(retryAfter / 1000)) });
+    return null;
+  }
+  return session;
+};
+
 const api = createServer(async (request, response) => {
   const { pathname } = new URL(request.url, `http://${request.headers.host ?? 'localhost'}`);
 
@@ -184,6 +290,10 @@ const api = createServer(async (request, response) => {
     json(request, response, 204);
     return;
   }
+
+  // Antes de qualquer trabalho, inclusive o scrypt do login. Um 429 aqui custa uma
+  // subtração e uma comparação.
+  if (rateLimitIp(request, response)) return;
 
   if (pathname === '/api/auth/login' && request.method === 'POST') {
     try {
@@ -252,11 +362,10 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/events' && request.method === 'GET') {
-    const session = await authenticate(request);
-    if (!session) {
-      json(request, response, 401, { error: 'Authentication required' });
-      return;
-    }
+    // Entra no mesmo limite das outras rotas. A conexão é longa, mas conta como
+    // uma requisição, e é isso que limita o número de streams abertos.
+    const session = await authorize(request, response);
+    if (!session) return;
     const origin = allowedOrigin(request);
     response.writeHead(200, {
       ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
@@ -272,11 +381,8 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/messages' && request.method === 'POST') {
-    const session = await authenticate(request);
-    if (!session) {
-      unauthorized(request, response);
-      return;
-    }
+    const session = await authorize(request, response);
+    if (!session) return;
     try {
       const input = JSON.parse(await readBody(request));
       const text = typeof input.text === 'string' ? input.text.trim() : '';
@@ -309,11 +415,8 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/checkins' && request.method === 'POST') {
-    const session = await authenticate(request);
-    if (!session) {
-      unauthorized(request, response);
-      return;
-    }
+    const session = await authorize(request, response);
+    if (!session) return;
     try {
       const input = JSON.parse(await readBody(request));
       const patientId = session.role === 'patient' ? session.userId : input.patientId;
@@ -350,11 +453,8 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/medication-taken' && request.method === 'POST') {
-    const session = await authenticate(request);
-    if (!session) {
-      unauthorized(request, response);
-      return;
-    }
+    const session = await authorize(request, response);
+    if (!session) return;
     try {
       const input = JSON.parse(await readBody(request));
       const patientId = session.role === 'patient' ? session.userId : input.patientId;
@@ -381,11 +481,8 @@ const api = createServer(async (request, response) => {
     return;
   }
 
-  const session = await authenticate(request);
-  if (!session) {
-    unauthorized(request, response);
-    return;
-  }
+  const session = await authorize(request, response);
+  if (!session) return;
 
   try {
     if (request.method === 'GET') {

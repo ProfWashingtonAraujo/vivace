@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { createHash } from 'node:crypto';
 import { createPool } from '../db/session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -102,6 +103,10 @@ before(async () => {
   await pool.query('DELETE FROM sessions');
   await pool.query('DELETE FROM login_attempts');
 
+  // O limite de requisições é lido de VIVACE_RATE_*, e o teste de rate limit
+  // precisa estourar o teto. Um teto alto aqui (1200 por sessão por minuto) deixa
+  // a suíte inteira passar sem tocar no limite, e o teste do limite sobe um
+  // servidor próprio com teto baixo, sem afetar os outros.
   serverPid = await startServer();
 });
 
@@ -382,9 +387,14 @@ describe('sessao e bloqueio no banco', () => {
 
   const countSessions = async () => Number((await pool.query('SELECT count(*)::int AS total FROM sessions')).rows[0].total);
 
+  // O teste procura a sessão pelo hash, como o servidor faz, e não pelo token: se
+  // ele procurasse pelo token em claro, estaria provando que o token está no
+  // banco, que é justamente o que não pode mais acontecer.
+  const digest = token => createHash('sha256').update(token).digest('hex');
+
   it('login grava a sessao no banco com papel, usuario e nome', async () => {
     const { token, name } = await login('mariana', 'vivace-demo', '10.9.0.10');
-    const row = (await pool.query('SELECT * FROM sessions WHERE token = $1', [token])).rows[0];
+    const row = (await pool.query('SELECT * FROM sessions WHERE token_hash = $1', [digest(token)])).rows[0];
     assert.ok(row, 'a sessao nao foi gravada em sessions');
     assert.equal(row.role, 'patient');
     assert.equal(row.user_id, 'pat-1');
@@ -392,6 +402,22 @@ describe('sessao e bloqueio no banco', () => {
     assert.ok(row.expires_at > new Date(), 'a sessao ja nasceu vencida');
     // Uma linha por login. O Map também dava uma, mas morria com o processo.
     assert.ok(await countSessions() > 0);
+  });
+
+  it('o token em claro nao aparece em nenhuma coluna de sessions', async () => {
+    const { token } = await login('Rafaely Carvalho', 'vivace-demo', '10.9.0.10');
+
+    // A garantia é sobre o valor, não sobre a coluna: um SELECT de tudo e uma
+    // busca pelo valor literal cobrem um token guardado em campo inesperado, e não
+    // só o token_hash.
+    const todas = await pool.query('SELECT * FROM sessions');
+    const serializado = JSON.stringify(todas.rows);
+    assert.ok(!serializado.includes(token), 'o token em claro esta em alguma coluna de sessions');
+    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token_hash = $1', [token])).rows[0].total, 0);
+
+    // E o que está no lugar é o resumo, que é determinístico.
+    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token_hash = $1', [digest(token)])).rows[0].total, 1);
+    assert.match(digest(token), /^[0-9a-f]{64}$/);
   });
 
   it('sessao continua valida depois que o servidor reinicia', async () => {
@@ -405,11 +431,11 @@ describe('sessao e bloqueio no banco', () => {
 
   it('logout apaga a sessao no banco e o token nao volta a funcionar, nem apos restart', async () => {
     const { token } = await login('mariana', 'vivace-demo', '10.9.0.10');
-    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token = $1', [token])).rows[0].total, 1);
+    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token_hash = $1', [digest(token)])).rows[0].total, 1);
 
     const logout = await call('/api/auth/logout', { method: 'POST', token, ip: '10.9.0.10' });
     assert.equal(logout.status, 200);
-    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token = $1', [token])).rows[0].total, 0,
+    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token_hash = $1', [digest(token)])).rows[0].total, 0,
       'o logout responded ok mas deixou a sessao no banco');
 
     // Sem a linha, o token é rejeitado mesmo que o processo que o emitiu tenha
@@ -495,7 +521,7 @@ describe('sessao e bloqueio no banco', () => {
       // A linha continua no banco: quem rejeita é o filtro de expires_at na
       // consulta, não a ausência da linha. Apagar é tarefa do varredor, e é por
       // isso que o caminho de leitura não pode depender de a limpeza ter rodado.
-      const stillThere = await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token = $1', [token]);
+      const stillThere = await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token_hash = $1', [digest(token)]);
       assert.equal(stillThere.rows[0].total, 1, 'a sessao vencida deveria continuar fisicamente na tabela');
     } finally {
       stopServer(ttlPid);
@@ -505,5 +531,156 @@ describe('sessao e bloqueio no banco', () => {
   it('o lockout e a sessao sao limpos no fim, para nao vazar para a proxima execucao', async () => {
     await pool.query('DELETE FROM sessions');
     await pool.query('DELETE FROM login_attempts');
+  });
+});
+
+// As três lacunas da revisão de segurança. Cada bloco nega o problema, não só
+// descreve o bom: o teste que passa com a correção e sem ela não prova nada.
+describe('origem e limite de requisicoes', () => {
+  it('so a origem exata do frontend recebe Access-Control-Allow-Origin', async () => {
+    // A porta é a do frontend. `127.0.0.1:9999` era aceito quando a checagem
+    // comparava só o hostname, e é o caso que a allowlist por string inteira
+    // fecha.
+    const allowed = await fetch(`${base}/api/state`, { headers: { Origin: 'http://localhost:3000' } });
+    assert.equal(allowed.headers.get('access-control-allow-origin'), 'http://localhost:3000',
+      'a propria origem do frontend foi rejeitada');
+
+    for (const origin of ['http://127.0.0.1:9999', 'http://localhost:9999', 'http://evil.example.com', 'null', 'http://10.3.0.62:9999']) {
+      const response = await fetch(`${base}/api/state`, { headers: { Origin: origin } });
+      assert.equal(response.headers.get('access-control-allow-origin'), null,
+        `origem indevida liberada: ${origin}`);
+    }
+  });
+
+  it('VIVACE_ALLOWED_ORIGINS libera uma origem fora do padrao', async () => {
+    const at = 'http://127.0.0.1:3196';
+    const pid = await startServer({ VIVACE_API_PORT: '3196', VIVACE_ALLOWED_ORIGINS: 'https://app.exemplo.med.br' });
+    try {
+      const liberado = await fetch(`${at}/api/state`, { headers: { Origin: 'https://app.exemplo.med.br' } });
+      assert.equal(liberado.headers.get('access-control-allow-origin'), 'https://app.exemplo.med.br');
+      const outro = await fetch(`${at}/api/state`, { headers: { Origin: 'https://outro.exemplo.med.br' } });
+      assert.equal(outro.headers.get('access-control-allow-origin'), null, 'liberou uma origem que nao esta na lista');
+    } finally {
+      stopServer(pid);
+    }
+  });
+
+  it('estoura o limite por sessao e responde 429 com Retry-After', async () => {
+    // Servidor próprio com teto baixo, para não precisar de milhares de requisições
+    // e para não deixar o contador de outro teste em estado limítrofe.
+    const at = 'http://127.0.0.1:3197';
+    const ip = '10.9.1.1';
+    const pid = await startServer({
+      VIVACE_API_PORT: '3197',
+      VIVACE_RATE_SESSION_MAX: '5',
+      VIVACE_RATE_IP_MAX: '1000',
+      VIVACE_RATE_WINDOW_MS: '60000'
+    });
+    try {
+      const loginResult = await call('/api/auth/login', { method: 'POST', at, ip, body: { username: 'Rafaely Carvalho', password: 'vivace-demo' } });
+      assert.equal(loginResult.status, 200, `login falhou no servidor de rate limit: ${JSON.stringify(loginResult.body)}`);
+      const { token } = loginResult.body;
+
+      const statuses = [];
+      for (let i = 0; i < 8; i += 1) {
+        statuses.push((await call('/api/state', { at, token, ip })).status);
+      }
+      // Teto de sessão é 5, e o login não conta (é a rota que faz o próprio
+      // bloqueio), então as 5 primeiras passam e a 6a em diante leva 429.
+      assert.deepEqual(statuses.slice(0, 5), [200, 200, 200, 200, 200], `esperava 5x200, veio ${statuses.join(',')}`);
+      assert.ok(statuses.slice(5).every(status => status === 429), `esperava 429 depois do limite, veio ${statuses.join(',')}`);
+
+      const limited = await call('/api/state', { at, token, ip });
+      assert.match(limited.body.error, /Muitas requisições/);
+    } finally {
+      stopServer(pid);
+    }
+  });
+
+  it('o limite por sessao nao contaminou outra sessao', async () => {
+    const at = 'http://127.0.0.1:3197';
+    const pid = await startServer({
+      VIVACE_API_PORT: '3197',
+      VIVACE_RATE_SESSION_MAX: '5',
+      VIVACE_RATE_IP_MAX: '1000',
+      VIVACE_RATE_WINDOW_MS: '60000'
+    });
+    try {
+      const primeira = await call('/api/auth/login', { method: 'POST', at, ip: '10.9.1.2', body: { username: 'Rafaely Carvalho', password: 'vivace-demo' } });
+      const segunda = await call('/api/auth/login', { method: 'POST', at, ip: '10.9.1.2', body: { username: 'mariana', password: 'vivace-demo' } });
+      assert.equal(primeira.status, 200, `primeira sessao: ${JSON.stringify(primeira.body)}`);
+      assert.equal(segunda.status, 200, `segunda sessao: ${JSON.stringify(segunda.body)}`);
+
+      for (let i = 0; i < 8; i += 1) await call('/api/state', { at, token: primeira.body.token, ip: '10.9.1.2' });
+      const estragada = await call('/api/state', { at, token: primeira.body.token, ip: '10.9.1.2' });
+      const intacta = await call('/api/state', { at, token: segunda.body.token, ip: '10.9.1.2' });
+      assert.equal(estragada.status, 429, 'a sessao estourada devia estar bloqueada');
+      assert.equal(intacta.status, 200, 'o limite de uma sessao contaminou outra do mesmo IP');
+    } finally {
+      stopServer(pid);
+    }
+  });
+
+  it('o limite por IP segura varias sessoes do mesmo endereco', async () => {
+    const at = 'http://127.0.0.1:3197';
+    const ip = '10.9.1.3';
+    const pid = await startServer({
+      VIVACE_API_PORT: '3197',
+      VIVACE_RATE_SESSION_MAX: '1000',
+      VIVACE_RATE_IP_MAX: '6',
+      VIVACE_RATE_WINDOW_MS: '60000'
+    });
+    try {
+      const a = await call('/api/auth/login', { method: 'POST', at, ip, body: { username: 'Rafaely Carvalho', password: 'vivace-demo' } });
+      const b = await call('/api/auth/login', { method: 'POST', at, ip, body: { username: 'mariana', password: 'vivace-demo' } });
+      for (let i = 0; i < 4; i += 1) await call('/api/state', { at, token: a.body.token, ip });
+      for (let i = 0; i < 4; i += 1) await call('/api/state', { at, token: b.body.token, ip });
+      const outra = await call('/api/auth/login', { method: 'POST', at, ip, body: { username: 'admin@vivace.med.br', password: 'vivace-demo' } });
+      assert.equal(outra.status, 429, 'o limite por IP nao segurou o mesmo endereco com sessoes diferentes');
+    } finally {
+      stopServer(pid);
+    }
+  });
+
+  it('token invalido nao gasta a cota da sessao, mas nao escapa da cota do IP', async () => {
+    // São duas garantias diferentes, e a segunda é o que fecha o flood de scrypt.
+    const at = 'http://127.0.0.1:3197';
+
+    // 1) Token inválido nunca toca a cota de sessão: `authorize` devolve 401 antes
+    //    de contar, então um IP com cota de sessão mínima continua vendo 401.
+    const semIp = await startServer({
+      VIVACE_API_PORT: '3197',
+      VIVACE_RATE_SESSION_MAX: '1',
+      VIVACE_RATE_IP_MAX: '1000',
+      VIVACE_RATE_WINDOW_MS: '60000'
+    });
+    try {
+      for (let i = 0; i < 10; i += 1) {
+        const response = await call('/api/state', { at, token: 'token-que-nao-existe', ip: '10.9.1.5' });
+        assert.equal(response.status, 401, `token invalido devia dar 401, deu ${response.status}`);
+      }
+    } finally {
+      stopServer(semIp);
+    }
+
+    // 2) O limite de IP roda antes de autenticar, então nem um token falso escapa.
+    //    Sem isso, um flood de requisições com token inválido gastaria uma consulta
+    //    ao banco -- e, no login, um scrypt -- por requisição, sem teto.
+    const comIp = await startServer({
+      VIVACE_API_PORT: '3197',
+      VIVACE_RATE_SESSION_MAX: '1000',
+      VIVACE_RATE_IP_MAX: '3',
+      VIVACE_RATE_WINDOW_MS: '60000'
+    });
+    try {
+      const respostas = [];
+      for (let i = 0; i < 6; i += 1) {
+        respostas.push((await call('/api/state', { at, token: 'token-que-nao-existe', ip: '10.9.1.6' })).status);
+      }
+      assert.deepEqual(respostas, [401, 401, 401, 429, 429, 429],
+        `o limite de IP nao segurou token invalido: ${respostas.join(',')}`);
+    } finally {
+      stopServer(comIp);
+    }
   });
 });

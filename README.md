@@ -53,7 +53,7 @@ npm test
 - `db:migrate`: aplica `db/migrations/*.sql` em ordem, cada arquivo em uma transação, registrado em `schema_migrations` com checksum. Editar uma migração já aplicada faz o comando abortar; escreva uma nova. As migrações pressupõem ordem: reaplicar uma antiga depois de uma posterior não funciona.
 - `db:import`: importa `.data/vivace-state.json`. Trunca e reinsere, então exige `--force` se `patients` já tiver linhas.
 - `db:verify`: reidrata o agregado do banco e compara com o JSON de origem, campo a campo. É o gate da migração.
-- `test`: 52 asserções, 23 de RLS e 29 de API ponta a ponta. Roda com `--test-concurrency=1` de propósito: os dois arquivos reimportam a base no início e no fim, e dois `TRUNCATE` simultâneos travam com `deadlock detected`. Requer o cluster, as migrações e a importação rodados antes. Os testes gravam de verdade para exercitar a escrita, e restauram o banco ao final para não contaminar o gate.
+- `test`: 59 asserções, 23 de RLS e 36 de API ponta a ponta. Roda com `--test-concurrency=1` de propósito: os dois arquivos reimportam a base no início e no fim, e dois `TRUNCATE` simultâneos travam com `deadlock detected`. Requer o cluster, as migrações e a importação rodados antes. Os testes gravam de verdade para exercitar a escrita, e restauram o banco ao final para não contaminar o gate.
 
 ### Como o acesso é controlado
 
@@ -162,9 +162,31 @@ O prazo é decidido por `now()` no banco, e não pelo relógio do Node, para que
 
 O token de login vira uma linha em `sessions`, com papel, usuário, nome e `expires_at`. A expiração é **absoluta**: `expires_at` é gravado no login e nunca reescrito. Com TTL deslizante, cada requisição autenticada reescrevia o vencimento, e no banco isso seria um `UPDATE` por request — trocando uma leitura em memória por uma escrita no caminho quente. A consequência é que uma sessão que fica em uso não se renova sozinha: depois de 8 horas ela cai, e o usuário entra de novo.
 
-O `authenticate` virou assíncrono, porque a sessão é consultada do banco, e `GET /api/state` faz uma ida a mais por requisição. A verificação de validade está no próprio SQL (`expires_at > now()`), então uma sessão vencida nunca chega a existir para o Node. Apagar as linhas vencidas é tarefa de um varredor periódico, que faz `DELETE` indexado a cada `VIVACE_LOGIN_WINDOW_MS`; nenhuma query de leitura depende de a limpeza ter rodado.
+A linha é procurada pelo **hash** do token, e não pelo token. A tabela guarda `token_hash` (sha256) e nunca o valor que o cliente manda no cabeçalho. Sem isso, `sessions` era um cofre de credencial: qualquer leitura da base — `pg_dump`, réplica, backup, injeção em outra tabela — entregava de uma vez todas as sessões válidas das últimas 8 horas, prontas para ser reapresentadas. É o mesmo argumento que levou a senha para `account_credentials` na `006`, e ele só não tinha sido aplicado aqui.
 
-`POST /api/auth/logout` apaga a linha, e o token deixa de valer imediatamente, inclusive depois de um restart.
+sha256 e não scrypt de propósito: o token tem 256 bits do CSPRNG e não existe dicionário, então não há o que forçar. Um scrypt aqui custaria ~100ms em toda requisição autenticada para proteger algo que não sofre ataque de força bruta.
+
+A verificação de validade está no próprio SQL (`expires_at > now()`), então uma sessão vencida nunca chega a existir para o Node. Apagar as linhas vencidas é tarefa de um varredor periódico, que faz `DELETE` indexado a cada `VIVACE_LOGIN_WINDOW_MS`; nenhuma query de leitura depende de a limpeza ter rodado. `POST /api/auth/logout` apaga a linha, e o token deixa de valer imediatamente, inclusive depois de um restart.
+
+### Limite de requisições
+
+O bloqueio do login não protege o resto da API: um token válido, mesmo vazado, fazia `GET /api/state` e `PUT /api/state` sem limite, e o `PUT` reescreve o prontuário inteiro. Hoje existe cota **por sessão e por IP**, em janela fixa (`VIVACE_RATE_WINDOW_MS`, padrão 60s), com `VIVACE_RATE_SESSION_MAX` (120) e `VIVACE_RATE_IP_MAX` (300). Estourar devolve `429` com `Retry-After`.
+
+A cota por IP é de propósito bem maior que a de sessão: um consultório inteiro sai por um único endereço NAT, e um teto apertado derrubaria todo mundo atrás do mesmo roteador junto. O risco conhecido é o oposto do bloqueio de login — o limite de IP também é um vetor de negação de serviço, e um atacante atrás do mesmo NAT pode trancar a equipe. É a troca padrão, e o valor é configurável.
+
+A cota por IP vale inclusive para o login, e isso é o que fecha o flood de `scrypt`. O bloqueio por tentativas só conta **falhas**, então um flood de senhas certas — ou de requisições malformadas, que nem chegam a comparar senha — continuaria comprando ~100ms de CPU por requisição sem teto. A checagem roda antes de qualquer trabalho, então um `429` ali custa uma subtração.
+
+O `OPTIONS` do preflight é a única rota que não conta, porque o navegador o manda sozinho e não deve gastar cota de ninguém. Token inválido não gasta cota de sessão, porque a autenticação responde `401` antes de contar; a cota de IP, essa sim, se aplica.
+
+A chave da cota de sessão é o resumo do token apresentado, e não o `userId`: um token descartado e reapresentado recomeça a contagem em vez de deburdenar a sessão que ele finge ser.
+
+**A cota é por processo e não sobrevive a um restart.** Resetar o limite custa o mesmo que reiniciar a API. Um limite distribuído de verdade exigiria uma escrita por requisição, que é exatamente o caminho quente que o TTL absoluto da sessão decidiu não tocar. Para ambiente com mais de um processo, o teto efetivo é o configurado vezes o número de réplicas.
+
+### Origem das requisições
+
+O CORS compara a origem por **string inteira**, com scheme, host e porta. A versão anterior aceitava a porta que quisesse, porque comparava só o hostname: em desenvolvimento isso é inofensivo, e o mesmo código em produção liberaria qualquer porta do domínio real — um atacante que sirva a página em `http://localhost:9999` leria a resposta da API.
+
+A lista é a fonte da verdade e é montada no boot: o frontend nas portas que ele atende, o IP da própria máquina na porta do frontend (é o que faz o check-in no celular funcionar sem configurar origem a cada mudança de rede) e o que vier de `VIVACE_ALLOWED_ORIGINS`. Nada é derivado do cabeçalho `Host` do pedido, porque `Host` é controlado por quem faz a requisição.
 
 ### Tempo de resposta do login
 

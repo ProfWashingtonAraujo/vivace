@@ -1,4 +1,4 @@
-import { randomUUID, scrypt as scryptCallback } from 'node:crypto';
+import { createHash, randomUUID, scrypt as scryptCallback } from 'node:crypto';
 import { readAggregate, readPatient } from './aggregate.mjs';
 import { asAdmin, createMigrationPool, createPool, withSession } from './session.mjs';
 
@@ -125,22 +125,33 @@ export const rehashAccount = async (account, password) => {
 
 // ------------------------------------------------------------------ sessoes
 //
-// Estas quatro operações não usam withSession de propósito. As duas tabelas não
-// têm RLS (a decisão e o comentário da 011), então não existe papel para
+// Estas operações não usam withSession de propósito. A tabela de sessão não tem
+// policy (a decisão e o comentário da 011 e da 012), então não existe papel para
 // avaliar, e o BEGIN/set_config/COMMIT de withSession custaria três idas e voltas
 // ao banco no caminho quente de toda requisição autenticada. Sem transação, um
 // SELECT de sessão é uma ida só.
 
+// O token em claro não é a chave: o banco guarda sha256 dele, e a linha é procurada
+// pelo resumo. Uma leitura da base -- dump, réplica, backup, injeção em outra tabela
+// -- devolve resumos, que não dá para reapresentar como token. Mesmo argumento da
+// 006, que isolou o hash de senha em account_credentials.
+//
+// sha256 e não scrypt: o token tem 256 bits do CSPRNG e não tem dicionário, então
+// não há o que forçar. O custo de um scrypt aqui (~100ms) pagaria em toda requisição
+// autenticada para proteger algo que não sofre ataque de força bruta.
+const tokenHash = token => createHash('sha256').update(token).digest('hex');
+
 export const findSession = async token => {
+  if (!token) return null;
   const { rows } = await pool.query(
-    // A expiração é absoluta e quem decide é o relógio do banco. Traz
-    // explicitamente só as quatro colunas: ler expires_at devolve timestamptz e
-    // não há ganho em pagá-lo no Node.
-    'SELECT token, role, user_id, name FROM sessions WHERE token = $1 AND expires_at > now()',
-    [token]
+    // A expiração é absoluta e quem decide é o relógio do banco. Traz só as três
+    // colunas que o servidor usa: ler expires_at devolve timestamptz e não há ganho
+    // em pagá-lo no Node.
+    'SELECT role, user_id, name FROM sessions WHERE token_hash = $1 AND expires_at > now()',
+    [tokenHash(token)]
   );
   const row = rows[0];
-  return row ? { token: row.token, role: row.role, userId: row.user_id, name: row.name } : null;
+  return row ? { role: row.role, userId: row.user_id, name: row.name } : null;
 };
 
 // O TTL é absoluto: expires_at é gravado uma vez, no login. O TTL deslizante do
@@ -149,13 +160,13 @@ export const findSession = async token => {
 // qualquer réplica.
 export const createSession = ({ token, role, userId, name, ttlMs }) =>
   pool.query(
-    `INSERT INTO sessions (token, role, user_id, name, expires_at)
+    `INSERT INTO sessions (token_hash, role, user_id, name, expires_at)
      VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5::double precision / 1000))`,
-    [token, role, userId, name, ttlMs]
+    [tokenHash(token), role, userId, name, ttlMs]
   ).then(() => token);
 
 export const deleteSession = token =>
-  pool.query('DELETE FROM sessions WHERE token = $1', [token]).then(() => undefined);
+  pool.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash(token)]).then(() => undefined);
 
 // ------------------------------------------------- bloqueio de login
 
