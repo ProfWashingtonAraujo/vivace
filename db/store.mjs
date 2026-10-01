@@ -123,6 +123,73 @@ export const rehashAccount = async (account, password) => {
   return true;
 };
 
+// ------------------------------------------------------------------ sessoes
+//
+// Estas quatro operações não usam withSession de propósito. As duas tabelas não
+// têm RLS (a decisão e o comentário da 011), então não existe papel para
+// avaliar, e o BEGIN/set_config/COMMIT de withSession custaria três idas e voltas
+// ao banco no caminho quente de toda requisição autenticada. Sem transação, um
+// SELECT de sessão é uma ida só.
+
+export const findSession = async token => {
+  const { rows } = await pool.query(
+    // A expiração é absoluta e quem decide é o relógio do banco. Traz
+    // explicitamente só as quatro colunas: ler expires_at devolve timestamptz e
+    // não há ganho em pagá-lo no Node.
+    'SELECT token, role, user_id, name FROM sessions WHERE token = $1 AND expires_at > now()',
+    [token]
+  );
+  const row = rows[0];
+  return row ? { token: row.token, role: row.role, userId: row.user_id, name: row.name } : null;
+};
+
+// O TTL é absoluto: expires_at é gravado uma vez, no login. O TTL deslizante do
+// Map reescrevia o vencimento a cada requisição, e isso viraria um UPDATE por
+// request. O prazo também é calculado por now() no banco, para valer igual em
+// qualquer réplica.
+export const createSession = ({ token, role, userId, name, ttlMs }) =>
+  pool.query(
+    `INSERT INTO sessions (token, role, user_id, name, expires_at)
+     VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5::double precision / 1000))`,
+    [token, role, userId, name, ttlMs]
+  ).then(() => token);
+
+export const deleteSession = token =>
+  pool.query('DELETE FROM sessions WHERE token = $1', [token]).then(() => undefined);
+
+// ------------------------------------------------- bloqueio de login
+
+// O pior caso entre as chaves (o IP e a conta). bigint volta como string no
+// node-postgres, daí o Number.
+export const loginLockoutRemaining = async keys => {
+  const { rows } = await pool.query('SELECT app_login_lockout_ms($1::text[]) AS remaining', [keys]);
+  return Number(rows[0].remaining);
+};
+
+// A contagem mora em app_record_login_failure porque precisa ser um
+// read-modify-write atômico. As várias chaves vão na mesma instrução, via unnest,
+// para que registrar a falha continue custando uma ida ao banco.
+export const recordLoginFailure = (keys, { windowMs, lockoutMs, maxAttempts }) =>
+  pool.query(
+    'SELECT app_record_login_failure(k, $1, $2, $3) FROM unnest($4::text[]) AS k',
+    [windowMs, lockoutMs, maxAttempts, keys]
+  ).then(() => undefined);
+
+export const clearLoginFailures = keys =>
+  pool.query('DELETE FROM login_attempts WHERE key = ANY($1::text[])', [keys]).then(() => undefined);
+
+// O que sweepLoginAttempts fazia no Map, agora em dois DELETEs indexados. As
+// leituras já expiram sozinhas (o filtro de janela e de locked_until estão nas
+// queries), então isto é só higiene: sem isso, sessões mortas e chaves
+// esquecidas ficariam para sempre.
+export const purgeExpiredAuth = windowMs =>
+  pool.query(
+    `WITH purged AS (DELETE FROM sessions WHERE expires_at <= now())
+     DELETE FROM login_attempts
+     WHERE first_attempt_at <= now() - make_interval(secs => $1::double precision / 1000)`,
+    [windowMs]
+  ).then(() => undefined);
+
 // ------------------------------------------------------------------ escrita
 
 // As colunas do schema sao NOT NULL com default, entao `?? null` estouraria a

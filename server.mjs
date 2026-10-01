@@ -18,8 +18,6 @@ const extraOrigins = (process.env.VIVACE_ALLOWED_ORIGINS ?? '')
   .map(origin => origin.trim())
   .filter(Boolean);
 const eventClients = new Map();
-const sessions = new Map();
-const loginAttempts = new Map();
 
 const scrypt = (password, salt) => new Promise((resolve, reject) => {
   scryptCallback(password, salt, 64, (error, key) => (error ? reject(error) : resolve(key)));
@@ -49,30 +47,29 @@ const burnScrypt = async password => {
   await scrypt(password, decoySalt);
 };
 
-const createSession = (account) => {
-  const token = randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
-  sessions.set(token, { ...account, expiresAt: Date.now() + sessionTtlMs });
-  return token;
-};
+const newSessionToken = () => randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, '');
+
+const createSession = account => store.createSession({ ...account, token: newSessionToken(), ttlMs: sessionTtlMs });
 
 const bearerToken = request => {
   const header = request.headers.authorization ?? '';
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 };
 
-const authenticate = request => {
-  const token = bearerToken(request);
-  const session = token ? sessions.get(token) : undefined;
-  if (!session) return null;
-  if (session.expiresAt <= Date.now()) {
-    sessions.delete(token);
-    return null;
-  }
-  session.expiresAt = Date.now() + sessionTtlMs;
-  return session;
-};
-
 const sessionTokenFromUrl = url => new URL(url, 'http://localhost').searchParams.get('token') ?? '';
+
+// EventSource não manda cabeçalho de autorização, então o token também chega por
+// ?token= na URL. Ler dos dois aqui evita que cada rota repita o par.
+const requestToken = request => bearerToken(request) || sessionTokenFromUrl(request.url);
+
+// Assíncrono porque a sessão está no Postgres, e o que volta já vem filtrado
+// por expires_at: se o token não existe ou venceu, findSession devolve null e não
+// há expiresAt para o Node conferir. A expiração é absoluta, então este caminho
+// não escreve nada.
+const authenticate = async request => {
+  const token = requestToken(request);
+  return token ? store.findSession(token) : null;
+};
 
 const clientAddress = request => {
   const forwarded = request.headers['x-forwarded-for'];
@@ -86,38 +83,6 @@ const loginKeys = (request, identifier) => [
   `conta:${normalize(identifier)}`
 ];
 
-const loginLockoutRemaining = (request, identifier) => {
-  const now = Date.now();
-  let remaining = 0;
-  for (const key of loginKeys(request, identifier)) {
-    const record = loginAttempts.get(key);
-    if (!record) continue;
-    if (record.lockedUntil > now) {
-      remaining = Math.max(remaining, record.lockedUntil - now);
-      continue;
-    }
-    if (record.firstAttempt + loginWindowMs <= now) loginAttempts.delete(key);
-  }
-  return remaining;
-};
-
-const recordLoginFailure = (request, identifier) => {
-  const now = Date.now();
-  for (const key of loginKeys(request, identifier)) {
-    const record = loginAttempts.get(key);
-    const entry = record && record.firstAttempt + loginWindowMs > now
-      ? record
-      : { failures: 0, firstAttempt: now, lockedUntil: 0 };
-    entry.failures += 1;
-    if (entry.failures >= loginMaxAttempts) entry.lockedUntil = now + loginLockoutMs;
-    loginAttempts.set(key, entry);
-  }
-};
-
-const clearLoginFailures = (request, identifier) => {
-  for (const key of loginKeys(request, identifier)) loginAttempts.delete(key);
-};
-
 const humanizeWait = milliseconds => {
   const seconds = Math.max(1, Math.ceil(milliseconds / 1000));
   if (seconds < 60) return `${seconds} segundo${seconds === 1 ? '' : 's'}`;
@@ -127,14 +92,18 @@ const humanizeWait = milliseconds => {
   return `${hours} hora${hours === 1 ? '' : 's'}`;
 };
 
-const sweepLoginAttempts = () => {
-  const now = Date.now();
-  for (const [key, record] of loginAttempts) {
-    if (record.lockedUntil <= now && record.firstAttempt + loginWindowMs <= now) loginAttempts.delete(key);
-  }
+// A contagem mora no banco, não em um Map. A janela, o teto e a espera do
+// bloqueio continuam lidos do .env: são política do servidor, não do schema.
+const lockoutPolicy = { windowMs: loginWindowMs, lockoutMs: loginLockoutMs, maxAttempts: loginMaxAttempts };
+
+// O timer que varria o Map virou um DELETE indexado. Continua unref(), para não
+// segurar o processo aberto, e o .catch evita que uma falha de limpeza derrube o
+// servidor: perder a limpeza custa uma linha obsoleta, não disponibilidade.
+const sweepAuth = () => {
+  void store.purgeExpiredAuth(loginWindowMs).catch(error => console.error('Falha ao limpar sessões:', error));
 };
 
-setInterval(sweepLoginAttempts, loginWindowMs).unref();
+setInterval(sweepAuth, loginWindowMs).unref();
 
 const allowedOrigin = request => {
   const origin = request.headers.origin;
@@ -225,8 +194,14 @@ const api = createServer(async (request, response) => {
         json(request, response, 400, { error: 'Informe usuário e senha' });
         return;
       }
-      const lockedFor = loginLockoutRemaining(request, identifier);
+      const keys = loginKeys(request, identifier);
+      const lockedFor = await store.loginLockoutRemaining(keys);
       if (lockedFor > 0) {
+        // O mesmo scrypt que o caminho 401 gasta. Sem esta linha, o 429 saía em
+        // poucos milissegundos e o tempo de resposta denunciava que a conta
+        // existe e está bloqueada, desfazendo o que o burnScrypt existe para
+        // impedir.
+        await burnScrypt(password);
         const retryAfter = Math.ceil(lockedFor / 1000);
         console.log(`Login bloqueado por ${lockedFor}ms para ${identifier} (${clientAddress(request)})`);
         json(request, response, 429, {
@@ -240,7 +215,7 @@ const api = createServer(async (request, response) => {
       const account = await store.findAccount(identifier);
       if (!account) {
         await burnScrypt(password);
-        recordLoginFailure(request, identifier);
+        await store.recordLoginFailure(keys, lockoutPolicy);
         json(request, response, 401, { error: 'Usuário ou senha inválidos' });
         return;
       }
@@ -249,14 +224,14 @@ const api = createServer(async (request, response) => {
       const valid = await verifyPassword(password, stored);
       if (!hashed) await burnScrypt(password);
       if (!valid) {
-        recordLoginFailure(request, identifier);
+        await store.recordLoginFailure(keys, lockoutPolicy);
         json(request, response, 401, { error: 'Usuário ou senha inválidos' });
         return;
       }
-      clearLoginFailures(request, identifier);
+      await store.clearLoginFailures(keys);
       // Senha antiga em texto plano vira scrypt no primeiro login valido.
       if (!hashed) await store.rehashAccount(account, password);
-      const token = createSession({ role: account.role, userId: account.userId, name: account.name });
+      const token = await createSession({ role: account.role, userId: account.userId, name: account.name });
       json(request, response, 200, {
         token,
         role: account.role,
@@ -271,18 +246,13 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/auth/logout' && request.method === 'POST') {
-    const token = bearerToken(request) || sessionTokenFromUrl(request.url);
-    if (token) sessions.delete(token);
+    await store.deleteSession(requestToken(request));
     json(request, response, 200, { loggedOut: true });
     return;
   }
 
   if (pathname === '/api/events' && request.method === 'GET') {
-    const session = authenticate(request) ?? (() => {
-      const token = sessionTokenFromUrl(request.url);
-      const stored = token ? sessions.get(token) : undefined;
-      return stored && stored.expiresAt > Date.now() ? stored : null;
-    })();
+    const session = await authenticate(request);
     if (!session) {
       json(request, response, 401, { error: 'Authentication required' });
       return;
@@ -302,7 +272,7 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/messages' && request.method === 'POST') {
-    const session = authenticate(request);
+    const session = await authenticate(request);
     if (!session) {
       unauthorized(request, response);
       return;
@@ -339,7 +309,7 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/checkins' && request.method === 'POST') {
-    const session = authenticate(request);
+    const session = await authenticate(request);
     if (!session) {
       unauthorized(request, response);
       return;
@@ -380,7 +350,7 @@ const api = createServer(async (request, response) => {
   }
 
   if (pathname === '/api/medication-taken' && request.method === 'POST') {
-    const session = authenticate(request);
+    const session = await authenticate(request);
     if (!session) {
       unauthorized(request, response);
       return;
@@ -411,7 +381,7 @@ const api = createServer(async (request, response) => {
     return;
   }
 
-  const session = authenticate(request);
+  const session = await authenticate(request);
   if (!session) {
     unauthorized(request, response);
     return;
@@ -490,7 +460,6 @@ const angular = process.env.VIVACE_SKIP_FRONTEND === 'true'
 
 const shutdown = () => {
   angular?.kill();
-  sessions.clear();
   for (const client of eventClients.keys()) client.end();
   api.close(() => {
     void store.closeStore().finally(() => process.exit());

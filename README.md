@@ -53,7 +53,7 @@ npm test
 - `db:migrate`: aplica `db/migrations/*.sql` em ordem, cada arquivo em uma transação, registrado em `schema_migrations` com checksum. Editar uma migração já aplicada faz o comando abortar; escreva uma nova. As migrações pressupõem ordem: reaplicar uma antiga depois de uma posterior não funciona.
 - `db:import`: importa `.data/vivace-state.json`. Trunca e reinsere, então exige `--force` se `patients` já tiver linhas.
 - `db:verify`: reidrata o agregado do banco e compara com o JSON de origem, campo a campo. É o gate da migração.
-- `test`: 43 asserções, 23 de RLS e 20 de API ponta a ponta. Requer o cluster, as migrações e a importação rodados antes. Os testes gravam de verdade para exercitar a escrita, e restauram o banco ao final para não contaminar o gate.
+- `test`: 52 asserções, 23 de RLS e 29 de API ponta a ponta. Roda com `--test-concurrency=1` de propósito: os dois arquivos reimportam a base no início e no fim, e dois `TRUNCATE` simultâneos travam com `deadlock detected`. Requer o cluster, as migrações e a importação rodados antes. Os testes gravam de verdade para exercitar a escrita, e restauram o banco ao final para não contaminar o gate.
 
 ### Como o acesso é controlado
 
@@ -150,11 +150,27 @@ No primeiro acesso a API cria a conta de administração inicial. Ao entrar como
 
 O `POST /api/auth/login` conta as falhas por endereço IP e por conta, separadamente. Ao passar de `VIVACE_LOGIN_MAX_ATTEMPTS` (padrão: 5), a resposta vira `429` com o cabeçalho `Retry-After` e a tentativa seguinte só é aceita depois de `VIVACE_LOGIN_LOCKOUT_MS` (padrão: 15 minutos). As falhas somam dentro de uma janela de `VIVACE_LOGIN_WINDOW_MS` (padrão: 15 minutos) e um login bem-sucedido zera os contadores.
 
-Limitar pela conta impede que a força bruta distribuída por vários endereços passe, mas também permite que alguém tranque o acesso de um usuário legítimo com `VIVACE_LOGIN_MAX_ATTEMPTS` tentativas. Como os contadores ficam em memória, um reinício da API libera todo mundo; em produção, o desbloqueio precisa vir de um banco com registro das tentativas.
+Limitar pela conta impede que a força bruta distribuída por vários endereços passe, mas também permite que alguém tranque o acesso de um usuário legítimo com `VIVACE_LOGIN_MAX_ATTEMPTS` tentativas.
+
+As duas dimensões são independentes, e a diferença é deliberada: trocar de endereço não escapa de um bloqueio por conta, mas um endereço novo começa com a contagem zerada. A chave é `ip:<endereço>` e `conta:<identificador normalizado>`, na tabela `login_attempts`.
+
+Os contadores vivem no Postgres, na tabela `login_attempts`, e não na memória do processo. A consequência prática é que **o bloqueio sobrevive a um reinício da API e vale igual entre réplicas**: com um `Map` em memória, reiniciar o servidor liberava todo mundo, e duas réplicas dividiam a mesma contagem pela metade, de modo que cinco tentativas em cada uma entravam como uma. A contagem é gravada por `app_record_login_failure`, um único `INSERT ... ON CONFLICT` que atualiza as três colunas de uma vez, então requisições simultâneas para a mesma chave se serializam no índice e nenhuma falha se perde.
+
+O prazo é decidido por `now()` no banco, e não pelo relógio do Node, para que o TTL e o bloqueio valham igual em qualquer réplica. As tabelas de sessão e de tentativa **não têm RLS**, e isso é uma decisão consciente: a consulta que descobre quem é o chamador acontece antes de existir sessão, então ainda não há papel para uma policy avaliar. Um RLS aqui exigiria uma policy que liberasse a leitura por token, o que equivale a não ter RLS, com uma camada a mais para manter.
+
+### Sessão
+
+O token de login vira uma linha em `sessions`, com papel, usuário, nome e `expires_at`. A expiração é **absoluta**: `expires_at` é gravado no login e nunca reescrito. Com TTL deslizante, cada requisição autenticada reescrevia o vencimento, e no banco isso seria um `UPDATE` por request — trocando uma leitura em memória por uma escrita no caminho quente. A consequência é que uma sessão que fica em uso não se renova sozinha: depois de 8 horas ela cai, e o usuário entra de novo.
+
+O `authenticate` virou assíncrono, porque a sessão é consultada do banco, e `GET /api/state` faz uma ida a mais por requisição. A verificação de validade está no próprio SQL (`expires_at > now()`), então uma sessão vencida nunca chega a existir para o Node. Apagar as linhas vencidas é tarefa de um varredor periódico, que faz `DELETE` indexado a cada `VIVACE_LOGIN_WINDOW_MS`; nenhuma query de leitura depende de a limpeza ter rodado.
+
+`POST /api/auth/logout` apaga a linha, e o token deixa de valer imediatamente, inclusive depois de um restart.
 
 ### Tempo de resposta do login
 
 A resposta é a mesma (`401`, "Usuário ou senha inválidos") exista ou não a conta, e o servidor gasta o mesmo tempo nos dois casos: quando o usuário não existe, ou quando a senha ainda está em texto plano, roda um `scrypt` de descarte para compensar o `scrypt` que a verificação real não faria. Sem isso, um usuário inexistente responderia em milissegundos e o `scrypt` levaria dezenas, o que permite enumerar quem tem cadastro medindo a latência.
+
+O `429` de bloqueio também gasta um `scrypt` de descarte, pelo mesmo motivo. Ele não responde antes de verificar a senha, e antes da correção respondia em poucos milissegundos, o que denunciava pelo tempo que a conta existe e está bloqueada, desfazendo o que o `scrypt` de descarte existe para impedir. O teste `429 gasta scrypt` mede isso e falha se o `scrypt` voltar a faltar.
 
 ## Validar
 

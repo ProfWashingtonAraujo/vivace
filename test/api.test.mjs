@@ -4,15 +4,21 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
+import { createPool } from '../db/session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const base = 'http://127.0.0.1:3194';
 const json = { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' };
 
-const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1' } = {}) => {
+// Conecta como vivace_api, o papel da aplicação, para os testes de sessão e
+// bloqueio olharem a tabela como ela realmente fica gravada, e não só a resposta
+// da API.
+const pool = createPool();
+
+const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1', at = base } = {}) => {
   const headers = { ...json, 'X-Forwarded-For': ip };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${base}${path}`, {
+  const response = await fetch(`${at}${path}`, {
     method,
     headers,
     ...(body === undefined ? {} : { body: JSON.stringify(body) })
@@ -35,10 +41,11 @@ const login = async (username, password = 'vivace-demo', ip = '10.0.0.1') => {
 
 let serverPid = null;
 
-before(async () => {
-  const importResult = spawnSync(process.execPath, [resolve(root, 'db/import-from-json.mjs'), '--force'], { cwd: root, encoding: 'utf8' });
-  assert.equal(importResult.status, 0, `import falhou: ${importResult.stderr}`);
-
+// Sobe o servidor e espera a porta responder 401, que é o estado de pé sem
+// sessão. Extraído porque os testes de sessão e bloqueio precisam reiniciá-lo:
+// essa é a asserção central da fase, o bloqueio e a sessão existem depois do
+// processo que os criou.
+const startServer = async (env = {}) => {
   // detached + stdio em arquivo: se o processo filho herdar o stdout, o runner
   // de teste nunca ve EOF e trava.
   const log = openSync('/tmp/vivace-api-test.log', 'w');
@@ -51,33 +58,56 @@ before(async () => {
       DATABASE_URL: 'postgres://vivace_api:vivace@127.0.0.1:55432/vivace',
       MIGRATION_DATABASE_URL: 'postgres://vivace:vivace@127.0.0.1:55432/vivace',
       VIVACE_SKIP_FRONTEND: 'true',
-      VIVACE_API_PORT: '3194'
+      VIVACE_API_PORT: '3194',
+      ...env
     }
   });
-  serverPid = server.pid;
   server.unref();
 
+  const port = env.VIVACE_API_PORT ?? '3194';
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await new Promise(resolve => setTimeout(resolve, 250));
     try {
-      const probe = await call('/api/state');
-      if (probe.status === 401) return;
+      // A sonda precisa mirar a porta que este servidor recebeu. Se ficasse
+      // presa na 3194, ela veria o servidor compartilhado responder 401 e daria
+      // o arranque por DEFAULT antes do processo novo existir.
+      const probe = await call('/api/state', { at: `http://127.0.0.1:${port}` });
+      if (probe.status === 401) return server.pid;
     } catch {
       // ainda subindo
     }
   }
   throw new Error('servidor nao respondeu em 10s');
+};
+
+// Mata o grupo inteiro: o servidor cria socket e pool, e pode ter filho.
+const stopServer = pid => {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    spawnSync('kill', ['-9', String(pid)]);
+  }
+};
+
+before(async () => {
+  const importResult = spawnSync(process.execPath, [resolve(root, 'db/import-from-json.mjs'), '--force'], { cwd: root, encoding: 'utf8' });
+  assert.equal(importResult.status, 0, `import falhou: ${importResult.stderr}`);
+
+  // O import trunca as tabelas de clinica, mas sessão e bloqueio agora vivem no
+  // banco e sobrevivem a ele. Sem esta limpeza, uma execução anterior deixaria
+  // chaves bloqueadas e o teste de bloqueio de força bruta falharia por sobras
+  // da rodada passada, não por defeito do código.
+  // DELETE e não TRUNCATE: TRUNCATE é um privilégio à parte, que o papel da
+  // aplicação não tem, e a tabela é pequena demais para justificar o privilégio.
+  await pool.query('DELETE FROM sessions');
+  await pool.query('DELETE FROM login_attempts');
+
+  serverPid = await startServer();
 });
 
-after(() => {
-  if (serverPid) {
-    // Mata o grupo inteiro: o servidor cria socket e pool, e pode ter filho.
-    try {
-      process.kill(-serverPid, 'SIGKILL');
-    } catch {
-      spawnSync('kill', ['-9', String(serverPid)]);
-    }
-  }
+after(async () => {
+  if (serverPid) stopServer(serverPid);
+  await pool.end();
   const restore = spawnSync(process.execPath, [resolve(root, 'db/import-from-json.mjs'), '--force'], { cwd: root, encoding: 'utf8' });
   if (restore.status !== 0) console.error('falha ao restaurar o banco');
 });
@@ -336,5 +366,144 @@ describe('ordem das colecoes', () => {
       const isHttp = photo.imageUrl.startsWith('http');
       assert.ok(isData || isHttp, `origem inesperada: ${photo.imageUrl.slice(0, 40)}`);
     }
+  });
+});
+
+// A fase 4 trocou dois Maps por duas tabelas. O que precisa ser provado aqui não
+// é a resposta da API, e sim que o estado continua existindo quando o processo
+// que o criou morre: era exatamente isso que o Map em memória não dava.
+describe('sessao e bloqueio no banco', () => {
+  // Reinicia o servidor compartilhado. Se algo falhar no meio, o processo fica
+  // no ar de qualquer forma, porque o start só lança depois que a porta responde.
+  const restart = async env => {
+    if (serverPid) stopServer(serverPid);
+    serverPid = await startServer(env);
+  };
+
+  const countSessions = async () => Number((await pool.query('SELECT count(*)::int AS total FROM sessions')).rows[0].total);
+
+  it('login grava a sessao no banco com papel, usuario e nome', async () => {
+    const { token, name } = await login('mariana', 'vivace-demo', '10.9.0.10');
+    const row = (await pool.query('SELECT * FROM sessions WHERE token = $1', [token])).rows[0];
+    assert.ok(row, 'a sessao nao foi gravada em sessions');
+    assert.equal(row.role, 'patient');
+    assert.equal(row.user_id, 'pat-1');
+    assert.equal(row.name, name);
+    assert.ok(row.expires_at > new Date(), 'a sessao ja nasceu vencida');
+    // Uma linha por login. O Map também dava uma, mas morria com o processo.
+    assert.ok(await countSessions() > 0);
+  });
+
+  it('sessao continua valida depois que o servidor reinicia', async () => {
+    const { token } = await login('Rafaely Carvalho', 'vivace-demo', '10.9.0.10');
+    await restart();
+
+    const state = await call('/api/state', { token, ip: '10.9.0.10' });
+    assert.equal(state.status, 200, 'a sessao nao sobreviveu ao restart');
+    assert.equal(state.body.patients.length, 4);
+  });
+
+  it('logout apaga a sessao no banco e o token nao volta a funcionar, nem apos restart', async () => {
+    const { token } = await login('mariana', 'vivace-demo', '10.9.0.10');
+    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token = $1', [token])).rows[0].total, 1);
+
+    const logout = await call('/api/auth/logout', { method: 'POST', token, ip: '10.9.0.10' });
+    assert.equal(logout.status, 200);
+    assert.equal((await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token = $1', [token])).rows[0].total, 0,
+      'o logout responded ok mas deixou a sessao no banco');
+
+    // Sem a linha, o token é rejeitado mesmo que o processo que o emitiu tenha
+    // morrido: o segredo nunca esteve na memória do processo.
+    await restart();
+    assert.equal((await call('/api/state', { token, ip: '10.9.0.10' })).status, 401);
+  });
+
+  it('bloqueio de forca bruta sobrevive a restart, e o 429 traz Retry-After', async () => {
+    const ip = '10.9.0.20';
+    const identifier = 'conta-fantasma-bloqueio';
+    // Cinco tentativas, o teto padrao. Identificador inventado de proposito: o
+    // bloqueio nao depende de a conta existir, e assim nenhum login legitimo
+    // fica bloqueado no banco de desenvolvimento.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const result = await call('/api/auth/login', { method: 'POST', ip, body: { username: identifier, password: 'errada' } });
+      assert.equal(result.status, 401, `tentativa ${attempt + 1} deveria ser 401`);
+    }
+
+    const locked = await call('/api/auth/login', { method: 'POST', ip, body: { username: identifier, password: 'errada' } });
+    assert.equal(locked.status, 429);
+    assert.match(locked.body.error, /Muitas tentativas/);
+
+    const row = (await pool.query('SELECT * FROM login_attempts WHERE key = $1', [`ip:${ip}`])).rows[0];
+    assert.equal(row.failures, 5);
+    assert.ok(row.locked_until > new Date(), 'locked_until no futuro');
+
+    // A asserção central: com o Map, o restart apagava a contagem e a tentativa
+    // seguinte voltava a ser 401.
+    await restart();
+    const stillLocked = await call('/api/auth/login', { method: 'POST', ip, body: { username: identifier, password: 'errada' } });
+    assert.equal(stillLocked.status, 429, 'o bloqueio nao sobreviveu ao restart');
+  });
+
+  it('o bloqueio e por chave: outro IP e outra conta nao herdam a contagem', async () => {
+    // IP novo E conta nova. Se so o IP mudasse, a chave conta:continaria
+    // carregando as cinco falhas do teste anterior, e o 429 estaria correto: o
+    // bloqueio por conta existe justamente para valer mesmo quando o atacante
+    // troca de origem.
+    const result = await call('/api/auth/login', {
+      method: 'POST', ip: '10.9.0.21', body: { username: 'conta-fantasma-isolada', password: 'errada' }
+    });
+    assert.equal(result.status, 401, 'uma chave limpa foi bloqueada pela contagem de outra');
+  });
+
+  it('a mesma conta continua bloqueada mesmo vindo de outro IP', async () => {
+    // O outro lado da garantia: a chave conta: nao esvazia quando o IP muda.
+    const result = await call('/api/auth/login', {
+      method: 'POST', ip: '10.9.0.22', body: { username: 'conta-fantasma-bloqueio', password: 'errada' }
+    });
+    assert.equal(result.status, 429, 'a conta bloqueada entrou de novo por outro IP');
+  });
+
+  it('429 gasta scrypt, para nao denunciar conta bloqueada pelo tempo de resposta', async () => {
+    const ip = '10.9.0.20';
+    const identifier = 'conta-fantasma-bloqueio';
+    const started = process.hrtime.bigint();
+    const locked = await call('/api/auth/login', { method: 'POST', ip, body: { username: identifier, password: 'errada' } });
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    assert.equal(locked.status, 429);
+    // Piso, não comparação com o 401: o tempo do scrypt varia com a máquina,
+    // mas a distância entre "não gastou scrypt" (poucos ms, só uma query) e
+    // "gastou scrypt" (dezenas de ms) é de uma ordem de grandeza. Sem esta
+    // linha o teste passaria com o burn removido.
+    assert.ok(elapsedMs > 20, `o 429 respondeu em ${elapsedMs.toFixed(1)}ms, rápido demais para ter gasto scrypt`);
+  });
+
+  it('sessao vencida no banco nao autentica, mesmo com o processo vivo', async () => {
+    // Um servidor com TTL de 1s, em outra porta, para não esperar as 8h do
+    // padrão. A expiração é decided por now() no banco, então não há como
+    // forçar por cima: ou o prazo passou, ou não.
+    const shortTtl = 'http://127.0.0.1:3195';
+    const ttlPid = await startServer({ VIVACE_API_PORT: '3195', VIVACE_SESSION_TTL_MS: '1000' });
+    try {
+      const attempt = await call('/api/auth/login', { method: 'POST', at: shortTtl, ip: '10.9.0.30', body: { username: 'mariana', password: 'vivace-demo' } });
+      assert.equal(attempt.status, 200, `login no servidor de TTL curto falhou: ${JSON.stringify(attempt.body)}`);
+      const { token } = attempt.body;
+      assert.equal((await call('/api/state', { at: shortTtl, token, ip: '10.9.0.30' })).status, 200, 'a sessao de 1s nasceu morta');
+
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      assert.equal((await call('/api/state', { at: shortTtl, token, ip: '10.9.0.30' })).status, 401, 'sessao vencida ainda autenticou');
+
+      // A linha continua no banco: quem rejeita é o filtro de expires_at na
+      // consulta, não a ausência da linha. Apagar é tarefa do varredor, e é por
+      // isso que o caminho de leitura não pode depender de a limpeza ter rodado.
+      const stillThere = await pool.query('SELECT count(*)::int AS total FROM sessions WHERE token = $1', [token]);
+      assert.equal(stillThere.rows[0].total, 1, 'a sessao vencida deveria continuar fisicamente na tabela');
+    } finally {
+      stopServer(ttlPid);
+    }
+  });
+
+  it('o lockout e a sessao sao limpos no fim, para nao vazar para a proxima execucao', async () => {
+    await pool.query('DELETE FROM sessions');
+    await pool.query('DELETE FROM login_attempts');
   });
 });
