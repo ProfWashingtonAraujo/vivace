@@ -3,7 +3,7 @@ import { Tab, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
 import { FormsModule } from '@angular/forms';
 import type { Options } from 'highcharts';
 import { HighchartsChartDirective } from 'highcharts-angular';
-import { AlertSeverity, MedicationItem, PostOpInstruction, WoundPhoto } from '../types';
+import { AlertSeverity, MedicationItem, PostOpInstruction, TimelineEvent, WoundPhoto } from '../types';
 import { VivaceService } from './vivace.service';
 
 type RecordTab = 'wounds' | 'timeline' | 'vitals' | 'meds' | 'care' | 'chat' | 'notes';
@@ -55,6 +55,15 @@ export class PatientRecordComponent {
   noteText = '';
 
   readonly patient = computed(() => this.vivace.patients().find(item => item.id === this.patientId()) ?? this.vivace.patients()[0]);
+  readonly timelineEvents = computed(() => [...this.patient().timeline].reverse());
+  readonly timelineKinds: Record<TimelineEvent['type'], { label: string; color: string; icon: string }> = {
+    cirurgia: { label: 'Cirurgia', color: '#0B2A4A', icon: 'M12 3v18M5 8l7-5 7 5M7 21h10' },
+    alta: { label: 'Alta', color: '#1F7A5C', icon: 'M5 12l5 5L20 7' },
+    checkin: { label: 'Check-in', color: '#0B5CAB', icon: 'M9 5h6M9 3h6v4H9zM6 5H5v16h14V5h-1M9 14l2 2 4-4' },
+    curativo: { label: 'Curativo', color: '#92400E', icon: 'M4 8h16v8H4zM9 8v8M15 8v8' },
+    mensagem: { label: 'Mensagem', color: '#52627A', icon: 'M4 5h16v11H9l-5 4z' },
+    medicacao: { label: 'Medicação', color: '#6D4BC2', icon: 'M8 4h8l3 3v13H5V7zM9 12h6M12 9v6' }
+  };
   readonly woundPhotos = computed(() => this.patient().woundPhotos.filter(photo => !photo.imageUrl.includes('images.unsplash.com')));
   readonly selectedPhoto = computed(() => {
     const photos = this.woundPhotos();
