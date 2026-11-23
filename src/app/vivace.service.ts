@@ -392,7 +392,7 @@ export class VivaceService {
   }
 
   private avatarFor(name: string): string {
-    return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=E6F4F1&color=134E4A`;
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=E6F0FA&color=0B5CAB`;
   }
 
   private assignPrimaryProfessional(patients: Patient[], professional: ProfessionalUser): Patient[] {

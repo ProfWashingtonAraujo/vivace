@@ -1,56 +1,71 @@
 <section class="space-y-6">
-  <header class="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+  <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
     <div>
-      <p class="text-xs font-bold tracking-[0.16em] text-[#0B5CAB]">Administração</p>
-      <h1 class="mt-1 text-2xl sm:text-3xl font-bold text-[#0B5CAB]">Gestão de profissionais</h1>
-      <p class="mt-2 text-sm text-[#52627A]">Gerencie os profissionais que fazem parte da operação da clínica.</p>
+      <h1 class="text-2xl sm:text-3xl font-bold text-[#0B2A4A]">Profissionais</h1>
+      <p class="mt-1 text-sm text-[#52627A]">{{ vivace.professionals().length }} {{ vivace.professionals().length === 1 ? 'profissional cadastrado' : 'profissionais cadastrados' }} na clínica.</p>
     </div>
-    <div class="px-4 py-3 bg-white rounded-2xl border border-[#D9E2EC]"><strong class="block text-xl text-[#0B5CAB]">{{ vivace.professionals().length }}</strong><span class="text-xs text-[#52627A]">Profissionais</span></div>
+    @if (!formOpen()) {<button type="button" (click)="startNewProfessional()" class="px-5 py-3 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold">Novo profissional</button>}
   </header>
 
   @if (feedbackMessage()) {
     <div role="status" class="px-4 py-3 rounded-2xl border text-sm font-bold" [class.bg-[#ECFDF5]]="!feedbackError()" [class.border-[#A7F3D0]]="!feedbackError()" [class.text-[#047857]]="!feedbackError()" [class.bg-[#FFF1F2]]="feedbackError()" [class.border-[#FECDD3]]="feedbackError()" [class.text-[#BE123C]]="feedbackError()">{{ feedbackMessage() }}</div>
   }
 
-  <div class="grid lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)] gap-6 items-start">
-    <article class="bg-white rounded-3xl border border-[#D9E2EC] shadow-sm p-5 sm:p-7">
-      <div class="mb-5">
-        <p class="text-xs font-bold tracking-[0.16em] text-[#0B5CAB]">Cadastro administrativo</p>
-        <h2 class="mt-1 text-xl font-bold text-[#0B5CAB]">{{ editingProfessionalId() ? 'Editar profissional' : 'Novo profissional' }}</h2>
-      </div>
-      <form (submit)="saveProfessional($event)" class="grid sm:grid-cols-2 gap-4" novalidate>
-        <div class="sm:col-span-2 flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-[#F8FAFC] border border-[#D9E2EC] rounded-2xl">
-          @if (professionalAvatar()) {<img [src]="professionalAvatar()" alt="Prévia da foto do profissional" class="w-20 h-20 rounded-2xl object-cover border border-[#D9E2EC]" />} @else {<div class="w-20 h-20 rounded-2xl bg-[#E6F0FA] text-[#0B5CAB] grid place-items-center text-2xl font-bold">{{ professionalModel().name.charAt(0) || 'P' }}</div>}
-          <div class="flex-1"><strong class="block text-sm">Foto do profissional</strong><p class="mt-1 text-xs text-[#52627A]">JPEG, PNG ou WebP, com até 5 MB.</p><div class="flex flex-wrap gap-2 mt-3"><input #photoInput type="file" accept="image/jpeg,image/png,image/webp" (change)="selectAvatar($event)" class="sr-only" /><button type="button" (click)="photoInput.click()" [disabled]="processingAvatar()" class="px-4 py-2 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold disabled:opacity-60">{{ processingAvatar() ? 'Processando...' : professionalAvatar() ? 'Trocar foto' : 'Escolher foto' }}</button>@if (professionalAvatar()) {<button type="button" (click)="professionalAvatar.set('')" class="px-4 py-2 bg-[#FFF1F2] text-[#BE123C] rounded-xl text-xs font-bold">Remover</button>}</div></div>
-        </div>
-        @if (avatarError()) {<p role="alert" class="sm:col-span-2 -mt-2 text-xs font-bold text-[#BE123C]">{{ avatarError() }}</p>}
-        <label class="sm:col-span-2 text-xs font-bold">Nome completo<input [formField]="professionalForm.name" class="form-input" placeholder="Ex.: Ana Martins" /></label>
-        <label class="text-xs font-bold">E-mail<input type="email" [formField]="professionalForm.email" class="form-input" placeholder="ana@clinica.com.br" /></label>
-        <label class="text-xs font-bold">CRM ou COREN<input [formField]="professionalForm.crmCoren" class="form-input" placeholder="CRM-SP 000.000" /></label>
-        <label class="text-xs font-bold">Especialidade<input [formField]="professionalForm.specialty" class="form-input" placeholder="Cirurgia Geral" /></label>
-        <label class="text-xs font-bold">Função<input [formField]="professionalForm.role" class="form-input" placeholder="Cirurgiã responsável" /></label>
-        <label class="text-xs font-bold">Senha<input type="password" autocomplete="new-password" [formField]="professionalForm.password" class="form-input" placeholder="Mínimo de 8 caracteres" /></label>
-        <label class="text-xs font-bold">Confirmar senha<input type="password" autocomplete="new-password" [formField]="professionalForm.passwordConfirmation" class="form-input" placeholder="Digite novamente" /></label>
-        @if (editingProfessionalId()) {<p class="sm:col-span-2 -mt-2 text-xs text-[#52627A]">Deixe os campos de senha vazios para manter a senha atual.</p>}
-        <div class="sm:col-span-2 mt-2 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-          @if (editingProfessionalId()) {<button type="button" (click)="cancelProfessionalEdit()" class="px-5 py-3 border border-[#D9E2EC] text-[#52627A] rounded-2xl text-sm font-bold">Cancelar</button>}
-          <button type="submit" [disabled]="professionalForm().submitting()" class="px-5 py-3 bg-[#0B5CAB] text-white rounded-2xl text-sm font-bold disabled:opacity-60">{{ editingProfessionalId() ? 'Salvar alterações' : 'Cadastrar profissional' }}</button>
+    @if (formOpen()) {
+    <article class="bg-white rounded-3xl border border-[#D9E2EC] shadow-sm p-5 sm:p-7" aria-labelledby="professional-form-title">
+      <h2 id="professional-form-title" class="text-xl font-bold text-[#0B2A4A]">{{ editingProfessionalId() ? 'Editar profissional' : 'Novo profissional' }}</h2>
+      <form (submit)="saveProfessional($event)" class="mt-5 space-y-6" novalidate>
+        <fieldset class="grid sm:grid-cols-2 gap-4">
+          <legend class="sr-only">Dados profissionais</legend>
+          <div class="sm:col-span-2 flex flex-col sm:flex-row sm:items-center gap-4 p-4 bg-[#F8FAFC] border border-[#D9E2EC] rounded-2xl">
+            @if (professionalAvatar()) {<img [src]="professionalAvatar()" alt="Prévia da foto do profissional" class="w-20 h-20 rounded-2xl object-cover border border-[#D9E2EC]" />} @else {<div class="w-20 h-20 rounded-2xl bg-[#E6F0FA] text-[#0B5CAB] grid place-items-center text-2xl font-bold">{{ professionalModel().name.charAt(0) || 'P' }}</div>}
+            <div class="flex-1"><strong class="block text-sm">Foto do profissional</strong><p class="mt-1 text-xs text-[#52627A]">JPEG, PNG ou WebP, com até 5 MB.</p><div class="flex flex-wrap gap-2 mt-3"><input #photoInput type="file" accept="image/jpeg,image/png,image/webp" (change)="selectAvatar($event)" class="sr-only" /><button type="button" (click)="photoInput.click()" [disabled]="processingAvatar()" class="px-4 py-2 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold disabled:opacity-60">{{ processingAvatar() ? 'Processando...' : professionalAvatar() ? 'Trocar foto' : 'Escolher foto' }}</button>@if (professionalAvatar()) {<button type="button" (click)="professionalAvatar.set('')" class="px-4 py-2 bg-[#FFF1F2] text-[#BE123C] rounded-xl text-xs font-bold">Remover</button>}</div></div>
+          </div>
+          @if (avatarError()) {<p role="alert" class="sm:col-span-2 -mt-2 text-xs font-bold text-[#BE123C]">{{ avatarError() }}</p>}
+          <label class="sm:col-span-2 text-xs font-bold">Nome completo<input [formField]="professionalForm.name" class="form-input" placeholder="Ex.: Ana Martins" /></label>
+          <label class="text-xs font-bold">CRM ou COREN<input [formField]="professionalForm.crmCoren" class="form-input" placeholder="CRM-SP 000.000" /></label>
+          <label class="text-xs font-bold">Especialidade<input [formField]="professionalForm.specialty" class="form-input" placeholder="Cirurgia Geral" /></label>
+          <label class="sm:col-span-2 text-xs font-bold">Função<input [formField]="professionalForm.role" class="form-input" placeholder="Cirurgiã responsável" /></label>
+        </fieldset>
+        <fieldset class="grid sm:grid-cols-2 gap-4 pt-6 border-t border-[#D9E2EC]">
+          <legend class="sr-only">Acesso ao sistema</legend><h3 class="sm:col-span-2 text-sm font-bold text-[#0B2A4A]" aria-hidden="true">Acesso ao sistema</h3>
+          <label class="sm:col-span-2 text-xs font-bold">E-mail<input type="email" [formField]="professionalForm.email" class="form-input" placeholder="ana@clinica.com.br" /></label>
+          <label class="text-xs font-bold">Senha<input type="password" autocomplete="new-password" [formField]="professionalForm.password" class="form-input" placeholder="Mínimo de 8 caracteres" /></label>
+          <label class="text-xs font-bold">Confirmar senha<input type="password" autocomplete="new-password" [formField]="professionalForm.passwordConfirmation" class="form-input" placeholder="Digite novamente" /></label>
+          @if (editingProfessionalId()) {<p class="sm:col-span-2 -mt-2 text-xs text-[#52627A]">Deixe os campos de senha vazios para manter a senha atual.</p>}
+        </fieldset>
+        <div class="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+          <button type="button" (click)="cancelProfessionalEdit()" class="px-5 py-3 border border-[#D9E2EC] text-[#52627A] rounded-xl text-sm font-bold">Cancelar</button>
+          <button type="submit" [disabled]="professionalForm().submitting()" class="px-5 py-3 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold disabled:opacity-60">{{ editingProfessionalId() ? 'Salvar alterações' : 'Cadastrar profissional' }}</button>
         </div>
       </form>
     </article>
+  }
 
-    <aside class="bg-white rounded-3xl border border-[#D9E2EC] shadow-sm p-5">
-      <h2 class="font-bold text-[#0B5CAB]">Profissionais cadastrados</h2>
-      <div class="mt-4 space-y-3 max-h-[620px] overflow-y-auto">
-        @for (professional of vivace.professionals(); track professional.id) {
-          <div class="flex items-center gap-3 p-3 rounded-2xl bg-[#F8FAFC]">
-            <img [src]="professional.avatar" [alt]="professional.name" class="w-10 h-10 rounded-xl object-cover" />
-            <div class="min-w-0 flex-1"><strong class="block text-xs truncate">{{ professional.name }}</strong><span class="block text-xs text-[#52627A] truncate">{{ professional.specialty }} · {{ professional.crmCoren }}</span></div>
-            <button type="button" (click)="editProfessional(professional)" class="px-2 py-1 text-xs font-bold text-[#0B5CAB] hover:bg-[#E6F0FA] rounded-lg">Editar</button>
-            <button type="button" (click)="deleteProfessional(professional)" class="px-2 py-1 text-xs font-bold text-[#BE123C] hover:bg-[#FFF1F2] rounded-lg">Excluir</button>
+  <section class="bg-white rounded-3xl border border-[#D9E2EC] shadow-sm" aria-label="Profissionais cadastrados">
+    <div class="p-4 sm:p-5 border-b border-[#D9E2EC]">
+      <input type="search" [value]="searchQuery()" (input)="searchQuery.set($any($event.target).value)" placeholder="Buscar por nome, especialidade, função ou registro" aria-label="Buscar profissionais" class="form-input !mt-0" />
+    </div>
+    <ul class="divide-y divide-[#D9E2EC]">
+      @for (professional of filteredProfessionals(); track professional.id) {
+        <li class="flex flex-wrap sm:flex-nowrap items-center gap-x-4 gap-y-3 p-4 sm:px-5">
+          <img [src]="professional.avatar" [alt]="professional.name" class="w-12 h-12 rounded-xl object-cover shrink-0" />
+          <div class="min-w-0 flex-1 basis-48">
+            <strong class="block">{{ professional.name }}</strong>
+            <span class="block text-sm text-[#52627A]">{{ professional.role }} · {{ professional.specialty }}</span>
           </div>
-        }
-      </div>
-    </aside>
-  </div>
+          <div class="hidden md:block min-w-0 w-56 text-sm text-[#52627A]">
+            <span class="block">{{ professional.crmCoren }}</span>
+            <span class="block truncate">{{ professional.email }}</span>
+          </div>
+          <div class="flex gap-1 ml-auto">
+            <button type="button" (click)="editProfessional(professional)" [attr.aria-label]="'Editar ' + professional.name" class="px-3 py-2 text-sm font-bold text-[#0B5CAB] hover:bg-[#E6F0FA] rounded-lg">Editar</button>
+            <button type="button" (click)="deleteProfessional(professional)" [attr.aria-label]="'Excluir ' + professional.name" class="px-3 py-2 text-sm font-bold text-[#BE123C] hover:bg-[#FFF1F2] rounded-lg">Excluir</button>
+          </div>
+        </li>
+      } @empty {
+        <li class="p-10 text-center"><strong>Nenhum profissional encontrado</strong><p class="mt-1 text-sm text-[#52627A]">Altere o termo da busca ou cadastre um novo profissional.</p></li>
+      }
+    </ul>
+  </section>
 </section>

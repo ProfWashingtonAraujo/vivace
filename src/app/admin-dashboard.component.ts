@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, computed, signal } from '@angular/core';
 import { form, FormField, required, submit } from '@angular/forms/signals';
 import { ProfessionalUser } from '../types';
 import { VivaceService } from './vivace.service';
@@ -25,6 +25,15 @@ export class AdminDashboardComponent {
   readonly feedbackMessage = signal('');
   readonly feedbackError = signal(false);
   readonly editingProfessionalId = signal<string | null>(null);
+  readonly formOpen = signal(false);
+  readonly searchQuery = signal('');
+  readonly filteredProfessionals = computed(() => {
+    const query = this.searchQuery().trim().toLowerCase();
+    const list = this.vivace.professionals();
+    return query
+      ? list.filter(item => [item.name, item.specialty, item.role, item.crmCoren, item.email].some(value => value.toLowerCase().includes(query)))
+      : list;
+  });
   readonly professionalAvatar = signal('');
   readonly processingAvatar = signal(false);
   readonly avatarError = signal('');
@@ -47,7 +56,7 @@ export class AdminDashboardComponent {
         ? await this.vivace.updateProfessional(editingId, professional, this.professionalAvatar())
         : await this.vivace.addProfessional({
           ...professional,
-          avatar: this.professionalAvatar() || `https://ui-avatars.com/api/?name=${encodeURIComponent(professional.name)}&background=134E4A&color=ffffff`
+          avatar: this.professionalAvatar() || `https://ui-avatars.com/api/?name=${encodeURIComponent(professional.name)}&background=0B5CAB&color=ffffff`
         });
       this.cancelProfessionalEdit();
       this.showFeedback(saved
@@ -56,7 +65,13 @@ export class AdminDashboardComponent {
     });
   }
 
+  startNewProfessional(): void {
+    this.cancelProfessionalEdit();
+    this.formOpen.set(true);
+  }
+
   editProfessional(professional: ProfessionalUser): void {
+    this.formOpen.set(true);
     this.editingProfessionalId.set(professional.id);
     this.professionalModel.set({
       name: professional.name,
@@ -72,6 +87,7 @@ export class AdminDashboardComponent {
   }
 
   cancelProfessionalEdit(): void {
+    this.formOpen.set(false);
     this.editingProfessionalId.set(null);
     this.professionalModel.set(this.emptyProfessional());
     this.professionalAvatar.set('');
