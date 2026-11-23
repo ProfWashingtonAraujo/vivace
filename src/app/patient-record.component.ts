@@ -66,16 +66,16 @@ export class PatientRecordComponent {
     const checkIns = [...this.patient().checkIns].reverse();
     return {
       chart: { type: 'areaspline', height: 280, backgroundColor: 'transparent', spacing: [10, 8, 8, 8] },
-      title: { text: 'Evolução da dor', align: 'left', style: { color: '#2D3748', fontSize: '14px', fontWeight: '700' } },
-      subtitle: { text: 'Escala visual analógica (EVA)', align: 'left', style: { color: '#718096', fontSize: '10px' } },
-      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#E2E8F0' },
+      title: { text: 'Evolução da dor', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
+      subtitle: { text: 'Escala visual analógica (EVA)', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
+      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC' },
       yAxis: {
         min: 0,
         max: 10,
         tickInterval: 2,
         title: { text: '' },
-        gridLineColor: '#E2E8F0',
-        plotBands: [{ from: 7, to: 10, color: 'rgba(255,127,102,0.10)', label: { text: 'Alerta', style: { color: '#C2412D', fontSize: '10px' } } }]
+        gridLineColor: '#D9E2EC',
+        plotBands: [{ from: 7, to: 10, color: 'rgba(255,127,102,0.10)', label: { text: 'Alerta', style: { color: '#C2412D', fontSize: '12px' } } }]
       },
       tooltip: { valueSuffix: '/10' },
       legend: { enabled: false },
@@ -89,23 +89,23 @@ export class PatientRecordComponent {
     const checkIns = [...this.patient().checkIns].reverse();
     return {
       chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 8, 8, 8] },
-      title: { text: 'Curva de temperatura', align: 'left', style: { color: '#2D3748', fontSize: '14px', fontWeight: '700' } },
-      subtitle: { text: 'Medição axilar em °C', align: 'left', style: { color: '#718096', fontSize: '10px' } },
-      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#E2E8F0' },
+      title: { text: 'Curva de temperatura', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
+      subtitle: { text: 'Medição axilar em °C', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
+      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC' },
       yAxis: {
         min: 35,
         max: 40,
         tickInterval: 1,
         title: { text: '' },
-        gridLineColor: '#E2E8F0',
-        plotLines: [{ value: 37.8, color: '#FF7F66', dashStyle: 'Dash', width: 2, label: { text: 'Limite 37,8°C', align: 'right', style: { color: '#C2412D', fontSize: '10px' } } }]
+        gridLineColor: '#D9E2EC',
+        plotLines: [{ value: 37.8, color: '#FF7F66', dashStyle: 'Dash', width: 2, label: { text: 'Limite 37,8°C', align: 'right', x: -4, y: -6, style: { color: '#C2412D', fontSize: '12px' } } }]
       },
       tooltip: { valueSuffix: '°C', valueDecimals: 1 },
       legend: { enabled: false },
       credits: { enabled: false },
       accessibility: { description: 'Gráfico da evolução da temperatura axilar informada pelo paciente em cada check-in.' },
       plotOptions: { series: { marker: { enabled: true, radius: 4 }, lineWidth: 3 } },
-      series: [{ name: 'Temperatura', type: 'spline', color: '#134E4A', data: checkIns.map(item => item.temperature) }]
+      series: [{ name: 'Temperatura', type: 'spline', color: '#0B5CAB', data: checkIns.map(item => item.temperature) }]
     };
   });
 

@@ -1,22 +1,22 @@
 @if (patient(); as patient) {
   <div ngTabs class="space-y-6 pb-12">
     <div class="flex items-center justify-between gap-3">
-      <button type="button" (click)="back.emit()" class="px-4 py-2.5 bg-white border border-[#E2E8F0] rounded-2xl text-xs font-bold shadow-sm">← Voltar aos pacientes</button>
-      <label class="text-xs font-bold text-[#718096]">Status clínico
-        <select [ngModel]="patient.status" (ngModelChange)="updateStatus($event)" class="ml-2 px-3 py-2 rounded-xl border border-[#E2E8F0] bg-white text-[#2D3748]">
+      <button type="button" (click)="back.emit()" class="px-4 py-2.5 bg-white border border-[#D9E2EC] rounded-2xl text-xs font-bold shadow-sm">← Voltar aos pacientes</button>
+      <label class="text-xs font-bold text-[#52627A]">Status clínico
+        <select [ngModel]="patient.status" (ngModelChange)="updateStatus($event)" class="ml-2 px-3 py-2 rounded-xl border border-[#D9E2EC] bg-white text-[#1B2B3F]">
           <option value="estavel">Estável</option><option value="atencao">Atenção</option><option value="critico">Alerta crítico</option>
         </select>
       </label>
     </div>
 
-    <section class="bg-white rounded-3xl p-6 sm:p-7 border border-[#E2E8F0] shadow-sm relative overflow-hidden">
-      <div class="absolute top-0 inset-x-0 h-2" [class.bg-[#FF7F66]]="patient.status === 'critico'" [class.bg-[#D97706]]="patient.status === 'atencao'" [class.bg-[#134E4A]]="patient.status === 'estavel'"></div>
+    <section class="bg-white rounded-3xl p-6 sm:p-7 border border-[#D9E2EC] shadow-sm relative overflow-hidden">
+      <div class="absolute top-0 inset-x-0 h-2" [class.bg-[#FF7F66]]="patient.status === 'critico'" [class.bg-[#D97706]]="patient.status === 'atencao'" [class.bg-[#0B5CAB]]="patient.status === 'estavel'"></div>
       <div class="flex flex-col lg:flex-row justify-between gap-6 pt-2">
-        <div class="flex gap-4"><img [src]="patient.avatar" [alt]="patient.name" class="w-20 h-20 rounded-2xl object-cover" /><div><h1 class="text-2xl font-bold">{{ patient.name }} <span class="text-xs px-3 py-1 bg-[#D1FAE5] text-[#134E4A] rounded-xl">D+{{ patient.postOpDay }}</span></h1><p class="text-sm font-bold text-[#134E4A]">{{ patient.procedure }}</p><p class="text-xs text-[#718096] mt-1">{{ patient.age }} anos · CPF {{ patient.cpf }} · {{ patient.hospital }}</p>@if (patient.allergies.length) {<p class="inline-block mt-3 text-[11px] font-bold text-[#C2412D] bg-[#FFE5E0] px-3 py-1 rounded-full">Alergias: {{ patient.allergies.join(', ') }}</p>}</div></div>
-        <dl class="bg-[#F8FAFC] rounded-2xl p-4 sm:p-5 border border-[#E2E8F0] text-xs w-full lg:w-96 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-3 items-start">
-          <dt class="text-[#718096]">Cirurgia</dt><dd class="font-bold text-right">{{ formatDate(patient.surgeryDate) }}</dd>
-          <dt class="text-[#718096]">Cirurgião</dt><dd class="font-bold text-right leading-relaxed">{{ patient.surgeon }}</dd>
-          <dt class="text-[#718096]">Contato</dt><dd class="text-right"><a [href]="'tel:' + patient.emergencyContact.phone" class="font-bold text-[#134E4A] leading-relaxed">{{ patient.emergencyContact.name }}</a></dd>
+        <div class="flex gap-4"><img [src]="patient.avatar" [alt]="patient.name" class="w-20 h-20 rounded-2xl object-cover" /><div><h1 class="text-2xl font-bold">{{ patient.name }} <span class="text-xs px-3 py-1 bg-[#D1FAE5] text-[#0B5CAB] rounded-xl">D+{{ patient.postOpDay }}</span></h1><p class="text-sm font-bold text-[#0B5CAB]">{{ patient.procedure }}</p><p class="text-xs text-[#52627A] mt-1">{{ patient.age }} anos · CPF {{ patient.cpf }} · {{ patient.hospital }}</p>@if (patient.allergies.length) {<p class="inline-block mt-3 text-xs font-bold text-[#C2412D] bg-[#FFE5E0] px-3 py-1 rounded-full">Alergias: {{ patient.allergies.join(', ') }}</p>}</div></div>
+        <dl class="bg-[#F8FAFC] rounded-2xl p-4 sm:p-5 border border-[#D9E2EC] text-xs w-full lg:w-96 grid grid-cols-[auto_minmax(0,1fr)] gap-x-5 gap-y-3 items-start">
+          <dt class="text-[#52627A]">Cirurgia</dt><dd class="font-bold text-right">{{ formatDate(patient.surgeryDate) }}</dd>
+          <dt class="text-[#52627A]">Cirurgião</dt><dd class="font-bold text-right leading-relaxed">{{ patient.surgeon }}</dd>
+          <dt class="text-[#52627A]">Contato</dt><dd class="text-right"><a [href]="'tel:' + patient.emergencyContact.phone" class="font-bold text-[#0B5CAB] leading-relaxed">{{ patient.emergencyContact.name }}</a></dd>
         </dl>
       </div>
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-[#F1F5F9]">
@@ -37,47 +37,47 @@
     <div ngTabPanel value="wounds">
     @if (activeTab() === 'wounds') {
       <div class="grid lg:grid-cols-12 gap-6">
-        <section class="lg:col-span-7 bg-white rounded-3xl p-5 border border-[#E2E8F0] shadow-sm">
-          <h2 class="font-bold">Registro fotográfico da ferida</h2><p class="text-xs text-[#718096] mb-4">Acompanhamento visual da cicatrização.</p>
+        <section class="lg:col-span-7 bg-white rounded-3xl p-5 border border-[#D9E2EC] shadow-sm">
+          <h2 class="font-bold">Registro fotográfico da ferida</h2><p class="text-xs text-[#52627A] mb-4">Acompanhamento visual da cicatrização.</p>
           @if (woundPhotos().length) {
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">@for (photo of woundPhotos(); track photo.id) {<button type="button" (click)="selectPhoto(photo)" class="relative rounded-2xl overflow-hidden border-2" [class.border-[#134E4A]]="selectedPhoto().id === photo.id"><img [src]="photo.imageUrl" [alt]="photo.dayLabel" class="w-full h-28 object-cover" /><span class="absolute bottom-2 left-2 text-xs font-bold text-white drop-shadow">{{ photo.dayLabel }}</span><small class="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-white/90 text-[#2D3748]">{{ photo.reviewStatus === 'pendente' ? 'Pendente' : 'Avaliada' }}</small></button>}</div>
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">@for (photo of woundPhotos(); track photo.id) {<button type="button" (click)="selectPhoto(photo)" class="relative rounded-2xl overflow-hidden border-2" [class.border-[#0B5CAB]]="selectedPhoto().id === photo.id"><img [src]="photo.imageUrl" [alt]="photo.dayLabel" class="w-full h-28 object-cover" /><span class="absolute bottom-2 left-2 text-xs font-bold text-white drop-shadow">{{ photo.dayLabel }}</span><small class="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-white/90 text-[#1B2B3F]">{{ photo.reviewStatus === 'pendente' ? 'Pendente' : 'Avaliada' }}</small></button>}</div>
           } @else {
-            <div class="mb-5 p-6 rounded-2xl border border-dashed border-[#CBD5E0] bg-[#F8FAFC] text-center"><strong class="block text-sm text-[#2D3748]">Nenhuma foto enviada</strong><p class="mt-1 text-xs text-[#718096]">As imagens enviadas pelo paciente aparecerão aqui.</p></div>
+            <div class="mb-5 p-6 rounded-2xl border border-dashed border-[#CBD5E0] bg-[#F8FAFC] text-center"><strong class="block text-sm text-[#1B2B3F]">Nenhuma foto enviada</strong><p class="mt-1 text-xs text-[#52627A]">As imagens enviadas pelo paciente aparecerão aqui.</p></div>
           }
-          @if (selectedPhoto(); as photo) {<div class="p-4 bg-[#F8FAFC] rounded-2xl"><img [src]="photo.imageUrl" alt="Ferida cirúrgica" class="w-full max-h-80 object-contain rounded-xl bg-black" /><p class="text-xs mt-3"><strong>Relato:</strong> {{ photo.patientNotes || 'Sem observações.' }}</p>@if (photo.reviewFeedback) {<div class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs text-[#134E4A]"><strong>Parecer de {{ photo.reviewedBy }}</strong><p>{{ photo.reviewFeedback }}</p></div>}</div>}
+          @if (selectedPhoto(); as photo) {<div class="p-4 bg-[#F8FAFC] rounded-2xl"><img [src]="photo.imageUrl" alt="Ferida cirúrgica" class="w-full max-h-80 object-contain rounded-xl bg-black" /><p class="text-xs mt-3"><strong>Relato:</strong> {{ photo.patientNotes || 'Sem observações.' }}</p>@if (photo.reviewFeedback) {<div class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs text-[#0B5CAB]"><strong>Parecer de {{ photo.reviewedBy }}</strong><p>{{ photo.reviewFeedback }}</p></div>}</div>}
         </section>
-        <section class="lg:col-span-5 bg-white rounded-3xl p-6 border border-[#E2E8F0] shadow-sm">
-          <h2 class="font-bold">Parecer clínico da ferida</h2><p class="text-xs text-[#718096] mb-4">Classifique e envie uma orientação ao paciente.</p>
+        <section class="lg:col-span-5 bg-white rounded-3xl p-6 border border-[#D9E2EC] shadow-sm">
+          <h2 class="font-bold">Parecer clínico da ferida</h2><p class="text-xs text-[#52627A] mb-4">Classifique e envie uma orientação ao paciente.</p>
           <div class="grid grid-cols-2 gap-2"><button type="button" (click)="reviewVerdict.set('avaliado_adequado')" class="review-choice" [class.selected-review]="reviewVerdict() === 'avaliado_adequado'">Adequado<small>Sem complicações</small></button><button type="button" (click)="reviewVerdict.set('requer_atencao')" class="review-choice" [class.selected-review-alert]="reviewVerdict() === 'requer_atencao'">Requer atenção<small>Necessita avaliação</small></button></div>
-          <textarea rows="6" [ngModel]="reviewComment()" (ngModelChange)="reviewComment.set($event)" class="w-full mt-4 p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-xs"></textarea>
-          <button type="button" (click)="saveReview()" class="w-full mt-3 py-3 bg-[#134E4A] text-white rounded-xl text-xs font-bold">Gravar parecer e notificar paciente</button>
-          @if (savedMessage()) {<p class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#134E4A]">{{ savedMessage() }}</p>}
+          <textarea rows="6" [ngModel]="reviewComment()" (ngModelChange)="reviewComment.set($event)" class="w-full mt-4 p-3 bg-[#F8FAFC] border border-[#D9E2EC] rounded-xl text-xs"></textarea>
+          <button type="button" (click)="saveReview()" class="w-full mt-3 py-3 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">Gravar parecer e notificar paciente</button>
+          @if (savedMessage()) {<p class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#0B5CAB]">{{ savedMessage() }}</p>}
         </section>
       </div>
     }
     </div>
 
     <div ngTabPanel value="timeline">
-    @if (activeTab() === 'timeline') {<section class="content-card"><h2 class="font-bold mb-5">Linha do tempo pós-operatória</h2><div class="space-y-3">@for (event of patient.timeline; track event.id) {<article class="p-4 bg-[#F8FAFC] border border-[#E2E8F0] rounded-2xl"><div class="flex justify-between gap-3"><strong class="text-sm">{{ event.dayLabel }} · {{ event.title }}</strong><small class="text-[#A0AEC0]">{{ event.date }}</small></div><p class="text-xs text-[#718096] mt-1">{{ event.description }}</p><small class="text-[#A0AEC0]">Registrado por {{ event.author }}</small></article>}</div></section>}
+    @if (activeTab() === 'timeline') {<section class="content-card"><h2 class="font-bold mb-5">Linha do tempo pós-operatória</h2><div class="space-y-3">@for (event of patient.timeline; track event.id) {<article class="p-4 bg-[#F8FAFC] border border-[#D9E2EC] rounded-2xl"><div class="flex justify-between gap-3"><strong class="text-sm">{{ event.dayLabel }} · {{ event.title }}</strong><small class="text-[#6B7A90]">{{ event.date }}</small></div><p class="text-xs text-[#52627A] mt-1">{{ event.description }}</p><small class="text-[#6B7A90]">Registrado por {{ event.author }}</small></article>}</div></section>}
     </div>
 
     <div ngTabPanel value="vitals">
-    @if (activeTab() === 'vitals') {<div class="space-y-5"><section class="grid lg:grid-cols-2 gap-4"><article class="content-card p-3"><div highchartsChart [options]="painChartOptions()" class="clinical-chart"></div></article><article class="content-card p-3"><div highchartsChart [options]="temperatureChartOptions()" class="clinical-chart"></div></article></section><section class="content-card"><h2 class="font-bold mb-4">Autoavaliações detalhadas</h2><div class="grid md:grid-cols-2 gap-3">@for (checkin of patient.checkIns; track checkin.id) {<article class="p-4 bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0]"><div class="flex justify-between"><strong>{{ checkin.dayLabel }} · {{ checkin.date }}</strong><span class="text-xs font-bold">Dor {{ checkin.painLevel }}/10 · {{ checkin.temperature }}°C</span></div><p class="text-xs text-[#718096] mt-2">Mobilidade: {{ checkin.mobilityScore.replace('_', ' ') }}</p><p class="text-xs text-[#718096]">{{ checkin.notes || 'Sem observações adicionais.' }}</p></article>}</div></section></div>}
+    @if (activeTab() === 'vitals') {<div class="space-y-5"><section class="grid lg:grid-cols-2 gap-4"><article class="content-card p-3"><div highchartsChart [options]="painChartOptions()" class="clinical-chart"></div></article><article class="content-card p-3"><div highchartsChart [options]="temperatureChartOptions()" class="clinical-chart"></div></article></section><section class="content-card"><h2 class="font-bold mb-4">Autoavaliações detalhadas</h2><div class="grid md:grid-cols-2 gap-3">@for (checkin of patient.checkIns; track checkin.id) {<article class="p-4 bg-[#F8FAFC] rounded-2xl border border-[#D9E2EC]"><div class="flex justify-between"><strong>{{ checkin.dayLabel }} · {{ checkin.date }}</strong><span class="text-xs font-bold">Dor {{ checkin.painLevel }}/10 · {{ checkin.temperature }}°C</span></div><p class="text-xs text-[#52627A] mt-2">Mobilidade: {{ checkin.mobilityScore.replace('_', ' ') }}</p><p class="text-xs text-[#52627A]">{{ checkin.notes || 'Sem observações adicionais.' }}</p></article>}</div></section></div>}
     </div>
 
     <div ngTabPanel value="meds">
     @if (activeTab() === 'meds') {
       <section class="content-card space-y-5">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div><h2 class="font-bold">Prescrição domiciliar</h2><p class="text-xs text-[#718096]">Cadastre e mantenha os medicamentos deste paciente.</p></div>
-          <div class="flex items-center justify-between sm:justify-end gap-4"><strong class="text-[#134E4A]">Adesão {{ patient.medicationAdherencePercent }}%</strong><button type="button" (click)="newMedication()" class="px-4 py-2.5 bg-[#134E4A] text-white rounded-xl text-xs font-bold">+ Novo medicamento</button></div>
+          <div><h2 class="font-bold">Prescrição domiciliar</h2><p class="text-xs text-[#52627A]">Cadastre e mantenha os medicamentos deste paciente.</p></div>
+          <div class="flex items-center justify-between sm:justify-end gap-4"><strong class="text-[#0B5CAB]">Adesão {{ patient.medicationAdherencePercent }}%</strong><button type="button" (click)="newMedication()" class="px-4 py-2.5 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">+ Novo medicamento</button></div>
         </div>
 
-        @if (medicationMessage()) {<p role="status" class="p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#134E4A]">{{ medicationMessage() }}</p>}
+        @if (medicationMessage()) {<p role="status" class="p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#0B5CAB]">{{ medicationMessage() }}</p>}
 
         @if (showMedicationForm()) {
           <form (ngSubmit)="saveMedication()" class="grid sm:grid-cols-2 gap-4 p-4 sm:p-5 bg-[#F8FAFC] border border-[#A7F3D0] rounded-2xl">
-            <div class="sm:col-span-2 flex items-center justify-between gap-3"><h3 class="font-bold text-[#134E4A]">{{ editingMedicationId() ? 'Editar medicamento' : 'Novo medicamento' }}</h3><button type="button" (click)="cancelMedicationEdit()" class="text-xs font-bold text-[#718096]">Fechar</button></div>
+            <div class="sm:col-span-2 flex items-center justify-between gap-3"><h3 class="font-bold text-[#0B5CAB]">{{ editingMedicationId() ? 'Editar medicamento' : 'Novo medicamento' }}</h3><button type="button" (click)="cancelMedicationEdit()" class="text-xs font-bold text-[#52627A]">Fechar</button></div>
             <label class="text-xs font-bold">Medicamento<input name="medicationName" [(ngModel)]="medicationModel.name" required class="form-input" placeholder="Ex.: Paracetamol" /></label>
             <label class="text-xs font-bold">Dose<input name="medicationDose" [(ngModel)]="medicationModel.dose" required class="form-input" placeholder="Ex.: 750 mg" /></label>
             <label class="text-xs font-bold">Frequência / prescrição<input name="medicationFrequency" [(ngModel)]="medicationModel.frequency" required class="form-input" placeholder="Ex.: A cada 6 horas se dor" /></label>
@@ -85,22 +85,22 @@
             <label class="sm:col-span-2 text-xs font-bold">Orientações<textarea name="medicationInstructions" [(ngModel)]="medicationModel.instructions" required rows="3" class="form-input resize-y" placeholder="Cuidados e instruções para o paciente"></textarea></label>
             <div class="sm:col-span-2">
               <label for="medication-time" class="text-xs font-bold">Horários</label>
-              <div class="mt-1.5 flex gap-2"><input id="medication-time" name="medicationTime" type="time" [(ngModel)]="medicationTime" class="form-input mt-0 max-w-40" /><button type="button" (click)="addMedicationTime()" class="px-4 border border-[#134E4A] text-[#134E4A] rounded-xl text-xs font-bold">Adicionar horário</button></div>
-              <div class="flex flex-wrap gap-2 mt-3">@for (time of medicationTimes(); track time) {<button type="button" (click)="removeMedicationTime(time)" class="px-3 py-1.5 bg-[#E6F4F1] text-[#134E4A] rounded-xl text-xs font-bold" [attr.aria-label]="'Remover horário ' + time">{{ time }} ×</button>} @empty {<span class="text-xs text-[#718096]">Adicione ao menos um horário.</span>}</div>
+              <div class="mt-1.5 flex gap-2"><input id="medication-time" name="medicationTime" type="time" [(ngModel)]="medicationTime" class="form-input mt-0 max-w-40" /><button type="button" (click)="addMedicationTime()" class="px-4 border border-[#0B5CAB] text-[#0B5CAB] rounded-xl text-xs font-bold">Adicionar horário</button></div>
+              <div class="flex flex-wrap gap-2 mt-3">@for (time of medicationTimes(); track time) {<button type="button" (click)="removeMedicationTime(time)" class="px-3 py-1.5 bg-[#E6F0FA] text-[#0B5CAB] rounded-xl text-xs font-bold" [attr.aria-label]="'Remover horário ' + time">{{ time }} ×</button>} @empty {<span class="text-xs text-[#52627A]">Adicione ao menos um horário.</span>}</div>
             </div>
-            <div class="sm:col-span-2 flex flex-col-reverse sm:flex-row sm:justify-end gap-2"><button type="button" (click)="cancelMedicationEdit()" class="px-5 py-3 border border-[#E2E8F0] text-[#718096] rounded-xl text-xs font-bold">Cancelar</button><button type="submit" class="px-5 py-3 bg-[#134E4A] text-white rounded-xl text-xs font-bold">{{ editingMedicationId() ? 'Salvar alterações' : 'Adicionar à prescrição' }}</button></div>
+            <div class="sm:col-span-2 flex flex-col-reverse sm:flex-row sm:justify-end gap-2"><button type="button" (click)="cancelMedicationEdit()" class="px-5 py-3 border border-[#D9E2EC] text-[#52627A] rounded-xl text-xs font-bold">Cancelar</button><button type="submit" class="px-5 py-3 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">{{ editingMedicationId() ? 'Salvar alterações' : 'Adicionar à prescrição' }}</button></div>
           </form>
         }
 
         <div class="space-y-3">
           @for (med of patient.medications; track med.id) {
-            <article class="p-4 bg-[#F8FAFC] rounded-2xl border border-[#E2E8F0]">
-              <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3"><div><strong>{{ med.name }} · {{ med.dose }}</strong><p class="text-xs text-[#134E4A] font-bold">{{ med.purpose }}</p></div><div class="flex gap-2"><button type="button" (click)="editMedication(med)" class="px-3 py-1.5 bg-[#E6F4F1] text-[#134E4A] rounded-lg text-xs font-bold">Editar</button><button type="button" (click)="deleteMedication(med)" class="px-3 py-1.5 bg-[#FFF1F2] text-[#BE123C] rounded-lg text-xs font-bold">Excluir</button></div></div>
-              <p class="text-xs text-[#718096] mt-2"><strong class="text-[#2D3748]">Prescrição:</strong> {{ med.frequency }}</p><p class="text-xs text-[#718096] mt-1 mb-3">{{ med.instructions }}</p>
-              <div class="flex flex-wrap gap-2">@for (time of med.times; track time) {<span class="text-xs px-2.5 py-1 rounded-xl" [class.bg-[#D1FAE5]]="med.takenToday[time]" [class.bg-[#E2E8F0]]="!med.takenToday[time]">{{ time }} · {{ med.takenToday[time] ? 'Tomado' : 'Pendente' }}</span>}</div>
+            <article class="p-4 bg-[#F8FAFC] rounded-2xl border border-[#D9E2EC]">
+              <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3"><div><strong>{{ med.name }} · {{ med.dose }}</strong><p class="text-xs text-[#0B5CAB] font-bold">{{ med.purpose }}</p></div><div class="flex gap-2"><button type="button" (click)="editMedication(med)" class="px-3 py-1.5 bg-[#E6F0FA] text-[#0B5CAB] rounded-lg text-xs font-bold">Editar</button><button type="button" (click)="deleteMedication(med)" class="px-3 py-1.5 bg-[#FFF1F2] text-[#BE123C] rounded-lg text-xs font-bold">Excluir</button></div></div>
+              <p class="text-xs text-[#52627A] mt-2"><strong class="text-[#1B2B3F]">Prescrição:</strong> {{ med.frequency }}</p><p class="text-xs text-[#52627A] mt-1 mb-3">{{ med.instructions }}</p>
+              <div class="flex flex-wrap gap-2">@for (time of med.times; track time) {<span class="text-xs px-2.5 py-1 rounded-xl" [class.bg-[#D1FAE5]]="med.takenToday[time]" [class.bg-[#D9E2EC]]="!med.takenToday[time]">{{ time }} · {{ med.takenToday[time] ? 'Tomado' : 'Pendente' }}</span>}</div>
             </article>
           } @empty {
-            <div class="p-8 border border-dashed border-[#CBD5E0] rounded-2xl text-center"><strong class="block text-sm">Nenhum medicamento prescrito</strong><p class="mt-1 text-xs text-[#718096]">Use “Novo medicamento” para iniciar a prescrição.</p></div>
+            <div class="p-8 border border-dashed border-[#CBD5E0] rounded-2xl text-center"><strong class="block text-sm">Nenhum medicamento prescrito</strong><p class="mt-1 text-xs text-[#52627A]">Use “Novo medicamento” para iniciar a prescrição.</p></div>
           }
         </div>
       </section>
@@ -111,31 +111,31 @@
     @if (activeTab() === 'care') {
       <section class="content-card space-y-5">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div><h2 class="font-bold">Cuidados personalizados</h2><p class="text-xs text-[#718096]">Defina as orientações exibidas somente para {{ patient.name }}.</p></div>
-          <button type="button" (click)="newInstruction()" class="px-4 py-2.5 bg-[#134E4A] text-white rounded-xl text-xs font-bold">+ Nova orientação</button>
+          <div><h2 class="font-bold">Cuidados personalizados</h2><p class="text-xs text-[#52627A]">Defina as orientações exibidas somente para {{ patient.name }}.</p></div>
+          <button type="button" (click)="newInstruction()" class="px-4 py-2.5 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">+ Nova orientação</button>
         </div>
 
-        @if (instructionMessage()) {<p role="status" class="p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#134E4A]">{{ instructionMessage() }}</p>}
+        @if (instructionMessage()) {<p role="status" class="p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#0B5CAB]">{{ instructionMessage() }}</p>}
 
         @if (showInstructionForm()) {
           <form (ngSubmit)="saveInstruction()" class="grid sm:grid-cols-2 gap-4 p-4 sm:p-5 bg-[#F8FAFC] border border-[#A7F3D0] rounded-2xl">
-            <div class="sm:col-span-2 flex items-center justify-between gap-3"><h3 class="font-bold text-[#134E4A]">{{ editingInstructionId() ? 'Editar orientação' : 'Nova orientação' }}</h3><button type="button" (click)="cancelInstructionEdit()" class="text-xs font-bold text-[#718096]">Fechar</button></div>
+            <div class="sm:col-span-2 flex items-center justify-between gap-3"><h3 class="font-bold text-[#0B5CAB]">{{ editingInstructionId() ? 'Editar orientação' : 'Nova orientação' }}</h3><button type="button" (click)="cancelInstructionEdit()" class="text-xs font-bold text-[#52627A]">Fechar</button></div>
             <label class="text-xs font-bold">Categoria<select name="instructionCategory" [(ngModel)]="instructionModel.category" class="form-input"><option value="curativo">Curativo</option><option value="alimentacao">Alimentação</option><option value="atividade">Atividade física</option><option value="higiene">Higiene</option><option value="alerta">Sinal de alerta</option><option value="medicacao">Medicação</option></select></label>
             <label class="text-xs font-bold">Título<input name="instructionTitle" [(ngModel)]="instructionModel.title" required class="form-input" placeholder="Ex.: Cuidados com o curativo" /></label>
             <label class="sm:col-span-2 text-xs font-bold">Orientação<textarea name="instructionContent" [(ngModel)]="instructionModel.content" required rows="5" class="form-input resize-y" placeholder="Descreva o cuidado de forma clara para o paciente"></textarea></label>
-            <label class="sm:col-span-2 flex items-center gap-2 p-3 bg-white border border-[#E2E8F0] rounded-xl text-xs font-bold"><input type="checkbox" name="instructionImportant" [(ngModel)]="instructionModel.important" class="accent-[#C2412D]" /> Destacar como orientação importante</label>
-            <div class="sm:col-span-2 flex flex-col-reverse sm:flex-row sm:justify-end gap-2"><button type="button" (click)="cancelInstructionEdit()" class="px-5 py-3 border border-[#E2E8F0] text-[#718096] rounded-xl text-xs font-bold">Cancelar</button><button type="submit" class="px-5 py-3 bg-[#134E4A] text-white rounded-xl text-xs font-bold">{{ editingInstructionId() ? 'Salvar alterações' : 'Enviar ao paciente' }}</button></div>
+            <label class="sm:col-span-2 flex items-center gap-2 p-3 bg-white border border-[#D9E2EC] rounded-xl text-xs font-bold"><input type="checkbox" name="instructionImportant" [(ngModel)]="instructionModel.important" class="accent-[#C2412D]" /> Destacar como orientação importante</label>
+            <div class="sm:col-span-2 flex flex-col-reverse sm:flex-row sm:justify-end gap-2"><button type="button" (click)="cancelInstructionEdit()" class="px-5 py-3 border border-[#D9E2EC] text-[#52627A] rounded-xl text-xs font-bold">Cancelar</button><button type="submit" class="px-5 py-3 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">{{ editingInstructionId() ? 'Salvar alterações' : 'Enviar ao paciente' }}</button></div>
           </form>
         }
 
         <div class="grid md:grid-cols-2 gap-3">
           @for (instruction of patient.instructions; track instruction.id) {
-            <article class="p-4 rounded-2xl border" [class.bg-[#FFF1F2]]="instruction.important" [class.border-[#FECDD3]]="instruction.important" [class.bg-[#F8FAFC]]="!instruction.important" [class.border-[#E2E8F0]]="!instruction.important">
-              <div class="flex items-start justify-between gap-3"><div><span class="text-[10px] font-bold uppercase tracking-wider" [class.text-[#BE123C]]="instruction.important" [class.text-[#134E4A]]="!instruction.important">{{ instruction.category.replace('_', ' ') }}</span><h3 class="font-bold mt-1">{{ instruction.title }}</h3></div><div class="flex gap-1"><button type="button" (click)="editInstruction(instruction)" class="px-2.5 py-1.5 bg-white text-[#134E4A] rounded-lg text-[10px] font-bold">Editar</button><button type="button" (click)="deleteInstruction(instruction)" class="px-2.5 py-1.5 bg-white text-[#BE123C] rounded-lg text-[10px] font-bold">Excluir</button></div></div>
-              <p class="text-xs text-[#718096] mt-2">{{ instruction.content }}</p>
+            <article class="p-4 rounded-2xl border" [class.bg-[#FFF1F2]]="instruction.important" [class.border-[#FECDD3]]="instruction.important" [class.bg-[#F8FAFC]]="!instruction.important" [class.border-[#D9E2EC]]="!instruction.important">
+              <div class="flex items-start justify-between gap-3"><div><span class="text-xs font-bold" [class.text-[#BE123C]]="instruction.important" [class.text-[#0B5CAB]]="!instruction.important">{{ instruction.category.replace('_', ' ') }}</span><h3 class="font-bold mt-1">{{ instruction.title }}</h3></div><div class="flex gap-1"><button type="button" (click)="editInstruction(instruction)" class="px-2.5 py-1.5 bg-white text-[#0B5CAB] rounded-lg text-xs font-bold">Editar</button><button type="button" (click)="deleteInstruction(instruction)" class="px-2.5 py-1.5 bg-white text-[#BE123C] rounded-lg text-xs font-bold">Excluir</button></div></div>
+              <p class="text-xs text-[#52627A] mt-2">{{ instruction.content }}</p>
             </article>
           } @empty {
-            <div class="md:col-span-2 p-8 border border-dashed border-[#CBD5E0] rounded-2xl text-center"><strong class="block text-sm">Nenhuma orientação cadastrada</strong><p class="mt-1 text-xs text-[#718096]">Crie orientações específicas para a recuperação deste paciente.</p></div>
+            <div class="md:col-span-2 p-8 border border-dashed border-[#CBD5E0] rounded-2xl text-center"><strong class="block text-sm">Nenhuma orientação cadastrada</strong><p class="mt-1 text-xs text-[#52627A]">Crie orientações específicas para a recuperação deste paciente.</p></div>
           }
         </div>
       </section>
@@ -143,11 +143,11 @@
     </div>
 
     <div ngTabPanel value="chat">
-    @if (activeTab() === 'chat') {<section class="content-card"><h2 class="font-bold">Canal direto com {{ patient.name }}</h2><p class="mt-1 text-xs text-[#718096]">Conversa atualizada em tempo real</p><div aria-live="polite" class="space-y-3 max-h-96 overflow-y-auto py-4">@for (message of patient.messages; track message.id) {<div class="flex" [class.justify-end]="message.sender === 'equipe'"><div class="max-w-lg p-3 rounded-2xl text-xs" [class.bg-[#134E4A]]="message.sender === 'equipe'" [class.text-white]="message.sender === 'equipe'" [class.bg-[#F8FAFC]]="message.sender === 'paciente'"><strong class="block text-[10px] opacity-70">{{ message.senderName }} · {{ message.timestamp }}</strong>{{ message.text }}</div></div>}</div>@if (chatError()) {<p role="alert" class="mb-3 text-xs font-bold text-[#BE123C]">{{ chatError() }}</p>}<form (ngSubmit)="sendChat()" class="flex gap-2"><input name="chat" [(ngModel)]="chatMessage" [disabled]="sendingChat()" placeholder="Escreva uma orientação..." class="flex-1 px-4 py-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-xl text-sm disabled:opacity-60" /><button [disabled]="sendingChat()" class="px-5 bg-[#134E4A] text-white rounded-xl text-xs font-bold disabled:opacity-60">{{ sendingChat() ? 'Enviando...' : 'Enviar' }}</button></form></section>}
+    @if (activeTab() === 'chat') {<section class="content-card"><h2 class="font-bold">Canal direto com {{ patient.name }}</h2><p class="mt-1 text-xs text-[#52627A]">Conversa atualizada em tempo real</p><div aria-live="polite" class="space-y-3 max-h-96 overflow-y-auto py-4">@for (message of patient.messages; track message.id) {<div class="flex" [class.justify-end]="message.sender === 'equipe'"><div class="max-w-lg p-3 rounded-2xl text-xs" [class.bg-[#0B5CAB]]="message.sender === 'equipe'" [class.text-white]="message.sender === 'equipe'" [class.bg-[#F8FAFC]]="message.sender === 'paciente'"><strong class="block text-xs opacity-70">{{ message.senderName }} · {{ message.timestamp }}</strong>{{ message.text }}</div></div>}</div>@if (chatError()) {<p role="alert" class="mb-3 text-xs font-bold text-[#BE123C]">{{ chatError() }}</p>}<form (ngSubmit)="sendChat()" class="flex gap-2"><input name="chat" [(ngModel)]="chatMessage" [disabled]="sendingChat()" placeholder="Escreva uma orientação..." class="flex-1 px-4 py-3 bg-[#F8FAFC] border border-[#D9E2EC] rounded-xl text-sm disabled:opacity-60" /><button [disabled]="sendingChat()" class="px-5 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold disabled:opacity-60">{{ sendingChat() ? 'Enviando...' : 'Enviar' }}</button></form></section>}
     </div>
 
     <div ngTabPanel value="notes">
-    @if (activeTab() === 'notes') {<section class="content-card"><h2 class="font-bold">Anotações internas da equipe</h2><form (ngSubmit)="addNote()" class="my-4 p-4 bg-[#F8FAFC] rounded-2xl"><textarea name="note" [(ngModel)]="noteText" rows="3" placeholder="Nova evolução clínica..." class="w-full p-3 bg-white border border-[#E2E8F0] rounded-xl text-xs"></textarea><button class="mt-2 px-4 py-2 bg-[#134E4A] text-white rounded-xl text-xs font-bold">Salvar nota</button></form><div class="space-y-3">@for (note of patient.clinicalNotes; track note.id) {<article class="p-4 border border-[#E2E8F0] rounded-2xl text-xs"><div class="flex justify-between"><strong>{{ note.author }}</strong><small>{{ note.date }}</small></div><p class="text-[#718096] mt-1">{{ note.text }}</p></article>}</div></section>}
+    @if (activeTab() === 'notes') {<section class="content-card"><h2 class="font-bold">Anotações internas da equipe</h2><form (ngSubmit)="addNote()" class="my-4 p-4 bg-[#F8FAFC] rounded-2xl"><textarea name="note" [(ngModel)]="noteText" rows="3" placeholder="Nova evolução clínica..." class="w-full p-3 bg-white border border-[#D9E2EC] rounded-xl text-xs"></textarea><button class="mt-2 px-4 py-2 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">Salvar nota</button></form><div class="space-y-3">@for (note of patient.clinicalNotes; track note.id) {<article class="p-4 border border-[#D9E2EC] rounded-2xl text-xs"><div class="flex justify-between"><strong>{{ note.author }}</strong><small>{{ note.date }}</small></div><p class="text-[#52627A] mt-1">{{ note.text }}</p></article>}</div></section>}
     </div>
   </div>
 }

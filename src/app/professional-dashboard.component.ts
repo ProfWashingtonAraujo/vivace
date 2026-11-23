@@ -49,7 +49,7 @@ export class ProfessionalDashboardComponent {
   }
 
   statusClasses(status: AlertSeverity): string {
-    return status === 'critico' ? 'bg-[#FFE5E0] text-[#C2412D]' : status === 'atencao' ? 'bg-[#FEF3C7] text-[#92400E]' : 'bg-[#D1FAE5] text-[#134E4A]';
+    return status === 'critico' ? 'bg-[#FFE5E0] text-[#C2412D]' : status === 'atencao' ? 'bg-[#FEF3C7] text-[#92400E]' : 'bg-[#D1FAE5] text-[#065F46]';
   }
 
   clearFilters(): void {
