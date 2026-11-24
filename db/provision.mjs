@@ -28,6 +28,30 @@ const runScript = (script, extraEnv = {}) => spawnSync(process.execPath, [join(r
   env: { ...process.env, ...extraEnv }
 });
 
+// Managed Postgres (Neon, RDS...) owners are not superusers. Migration 004 hands the SECURITY DEFINER
+// functions to vivace_rls, which needs SET ROLE on it and CREATE on the schema. Creating the roles and
+// the membership up front is idempotent and changes nothing on a database where they already exist.
+const prepare = new pg.Client({ connectionString: ownerUrl });
+await prepare.connect();
+try {
+  await prepare.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vivace_rls') THEN
+        CREATE ROLE vivace_rls NOLOGIN BYPASSRLS;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'vivace_api') THEN
+        CREATE ROLE vivace_api LOGIN;
+      END IF;
+    END $$
+  `);
+  await prepare.query('GRANT vivace_rls TO CURRENT_USER WITH INHERIT TRUE, SET TRUE');
+  await prepare.query('GRANT USAGE, CREATE ON SCHEMA public TO vivace_rls');
+  console.log('provision: roles prepared');
+} finally {
+  await prepare.end();
+}
+
 console.log('provision: applying migrations');
 const migrate = runScript('migrate.mjs');
 process.stdout.write(migrate.stdout ?? '');
