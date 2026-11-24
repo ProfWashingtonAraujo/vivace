@@ -33,7 +33,10 @@ export class PatientPortalComponent {
   readonly sendingMessage = signal(false);
   readonly messageError = signal('');
   readonly patient = this.vivace.selectedPatient;
-  readonly todayCheckIn = computed(() => this.patient()?.checkIns[0]);
+  readonly todayCheckIn = computed(() => {
+    const day = (label: string) => Number(/\d+/.exec(label)?.[0] ?? 0);
+    return this.patient()?.checkIns.reduce<DailyCheckIn | undefined>((latest, item) => !latest || day(item.dayLabel) > day(latest.dayLabel) ? item : latest, undefined);
+  });
   readonly lastPhoto = computed(() => this.patient()?.woundPhotos.find(photo => !photo.imageUrl.includes('images.unsplash.com')));
 
   painLevel = this.patient()?.currentPain ?? 3;

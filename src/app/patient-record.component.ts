@@ -71,31 +71,54 @@ export class PatientRecordComponent {
       ?? photos.find(photo => photo.reviewStatus === 'pendente')
       ?? photos[0];
   });
+  /** Check-ins ordered from oldest to newest by post-op day, whatever order they are stored in. */
+  readonly chronologicalCheckIns = computed(() => {
+    const day = (label: string) => Number(/\d+/.exec(label)?.[0] ?? 0);
+    return [...this.patient().checkIns].reverse().sort((first, second) => day(first.dayLabel) - day(second.dayLabel));
+  });
   readonly painChartOptions = computed<Options>(() => {
-    const checkIns = [...this.patient().checkIns].reverse();
+    const checkIns = this.chronologicalCheckIns();
+    const level = (pain: number) => pain >= 7 ? { label: 'Intensa', color: '#C2412D' } : pain >= 4 ? { label: 'Moderada', color: '#B45309' } : { label: 'Leve', color: '#1F7A5C' };
+    const last = checkIns.at(-1);
+    const previous = checkIns.at(-2);
+    const delta = last && previous ? last.painLevel - previous.painLevel : 0;
+    const trend = !previous ? '' : delta === 0 ? ' · igual ao registro anterior' : delta < 0 ? ` · ${-delta} ${-delta === 1 ? 'ponto' : 'pontos'} abaixo do registro anterior` : ` · ${delta} ${delta === 1 ? 'ponto' : 'pontos'} acima do registro anterior`;
     return {
-      chart: { type: 'areaspline', height: 280, backgroundColor: 'transparent', spacing: [10, 8, 8, 8] },
+      chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 12, 8, 8] },
       title: { text: 'Evolução da dor', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
-      subtitle: { text: 'Escala visual analógica (EVA)', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
-      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC' },
+      subtitle: { text: last ? `Último registro: ${last.painLevel}/10 (${level(last.painLevel).label.toLowerCase()}) em ${last.dayLabel}${trend}` : 'Sem registros de dor', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
+      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
       yAxis: {
         min: 0,
         max: 10,
         tickInterval: 2,
         title: { text: '' },
-        gridLineColor: '#D9E2EC',
-        plotBands: [{ from: 7, to: 10, color: 'rgba(255,127,102,0.10)', label: { text: 'Alerta', style: { color: '#C2412D', fontSize: '12px' } } }]
+        gridLineColor: '#E6ECF2',
+        labels: { style: { color: '#52627A', fontSize: '12px' } },
+        plotBands: [
+          { from: 0, to: 3.5, color: 'rgba(31,122,92,0.07)', label: { text: 'Leve', align: 'right', x: -6, y: -4, verticalAlign: 'bottom', style: { color: '#1F7A5C', fontSize: '12px' } } },
+          { from: 3.5, to: 6.5, color: 'rgba(180,83,9,0.07)', label: { text: 'Moderada', align: 'right', x: -6, y: 16, style: { color: '#B45309', fontSize: '12px' } } },
+          { from: 6.5, to: 10, color: 'rgba(194,65,45,0.08)', label: { text: 'Intensa', align: 'right', x: -6, y: 16, style: { color: '#C2412D', fontSize: '12px' } } }
+        ]
       },
-      tooltip: { valueSuffix: '/10' },
+      tooltip: {
+        useHTML: false,
+        formatter() {
+          const point = this as unknown as { x: string; y: number };
+          const item = checkIns.find(entry => entry.dayLabel === point.x);
+          return `${point.x}${item ? ` · ${item.date}` : ''} — Dor ${point.y}/10 (${level(point.y).label.toLowerCase()})`;
+        }
+      },
       legend: { enabled: false },
       credits: { enabled: false },
-      accessibility: { description: 'Gráfico da evolução do nível de dor informado pelo paciente em cada check-in.' },
-      plotOptions: { series: { marker: { enabled: true, radius: 4 }, lineWidth: 3 }, areaspline: { fillOpacity: 0.12 } },
-      series: [{ name: 'Dor', type: 'areaspline', color: '#FF7F66', data: checkIns.map(item => item.painLevel) }]
+      accessibility: { description: `Gráfico da evolução do nível de dor em cada check-in. ${checkIns.map(item => `${item.dayLabel}: ${item.painLevel} de 10`).join('; ')}.` },
+      plotOptions: { series: { lineWidth: 3, marker: { enabled: true, radius: 6, lineWidth: 2, lineColor: '#FFFFFF' }, dataLabels: { enabled: true, y: -4, style: { color: '#1B2B3F', fontSize: '12px', fontWeight: '700', textOutline: 'none' }, format: '{y}' } },
+      },
+      series: [{ name: 'Dor', type: 'spline', color: '#0B5CAB', data: checkIns.map(item => ({ y: item.painLevel, color: level(item.painLevel).color })) }]
     };
   });
   readonly temperatureChartOptions = computed<Options>(() => {
-    const checkIns = [...this.patient().checkIns].reverse();
+    const checkIns = this.chronologicalCheckIns();
     return {
       chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 8, 8, 8] },
       title: { text: 'Curva de temperatura', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
