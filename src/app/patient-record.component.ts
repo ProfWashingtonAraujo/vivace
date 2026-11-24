@@ -50,6 +50,7 @@ export class PatientRecordComponent {
   readonly reviewVerdict = signal<'avaliado_adequado' | 'requer_atencao'>('avaliado_adequado');
   readonly reviewComment = signal('Aspecto cicatricial favorável, sem sinais de infecção. Manter os cuidados habituais.');
   readonly savedMessage = signal('');
+  readonly noteMessage = signal('');
   readonly showMedicationForm = signal(false);
   readonly editingMedicationId = signal<string | null>(null);
   readonly medicationTimes = signal<string[]>([]);
@@ -366,8 +367,8 @@ export class PatientRecordComponent {
     if (!this.noteText.trim()) return;
     this.vivace.addClinicalNote(this.patient().id, this.noteText);
     this.noteText = '';
-    this.savedMessage.set('Nota clínica salva no prontuário.');
-    window.setTimeout(() => this.savedMessage.set(''), 3000);
+    this.noteMessage.set('Nota salva no prontuário.');
+    window.setTimeout(() => this.noteMessage.set(''), 3000);
   }
 
   private showMedicationFeedback(message: string): void {

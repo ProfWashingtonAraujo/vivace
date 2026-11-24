@@ -218,7 +218,25 @@
     </div>
 
     <div ngTabPanel value="notes">
-    @if (activeTab() === 'notes') {<section class="content-card"><h2 class="font-bold">Anotações internas da equipe</h2><form (ngSubmit)="addNote()" class="my-4 p-4 bg-[#F8FAFC] rounded-2xl"><textarea name="note" [(ngModel)]="noteText" rows="3" placeholder="Nova evolução clínica..." class="w-full p-3 bg-white border border-[#D9E2EC] rounded-xl text-xs"></textarea><button class="mt-2 px-4 py-2 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">Salvar nota</button></form><div class="space-y-3">@for (note of patient.clinicalNotes; track note.id) {<article class="p-4 border border-[#D9E2EC] rounded-2xl text-xs"><div class="flex justify-between"><strong>{{ note.author }}</strong><small>{{ note.date }}</small></div><p class="text-[#52627A] mt-1">{{ note.text }}</p></article>}</div></section>}
+    @if (activeTab() === 'notes') {<section class="content-card space-y-5">
+      <div><h2 class="font-bold">Anotações da equipe</h2><p class="text-sm text-[#52627A]">{{ patient.clinicalNotes.length }} {{ patient.clinicalNotes.length === 1 ? 'nota' : 'notas' }}. Visíveis apenas para a equipe: {{ patient.name }} não vê estas anotações.</p></div>
+      <form (ngSubmit)="addNote()" class="p-4 bg-[#F8FAFC] border border-[#D9E2EC] rounded-2xl">
+        <label for="clinical-note" class="text-sm font-bold">Nova evolução clínica</label>
+        <textarea id="clinical-note" name="note" [(ngModel)]="noteText" (keydown.control.enter)="addNote()" (keydown.meta.enter)="addNote()" rows="4" placeholder="Descreva a evolução, condutas e combinados com o paciente" class="form-input resize-y"></textarea>
+        <div class="mt-3 flex flex-wrap items-center justify-between gap-3"><span class="text-sm text-[#52627A]">Ctrl + Enter para salvar</span><button type="submit" [disabled]="!noteText.trim()" class="px-5 py-2.5 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold disabled:opacity-60">Salvar nota</button></div>
+      </form>
+      @if (noteMessage()) {<p role="status" class="p-3 bg-[#D1FAE5] rounded-xl text-sm font-bold text-[#065F46]">{{ noteMessage() }}</p>}
+      <ol class="space-y-3">
+        @for (note of patient.clinicalNotes; track note.id) {
+          <li class="p-4 sm:p-5 bg-white border border-[#D9E2EC] border-l-4 border-l-[#0B5CAB] rounded-2xl">
+            <div class="flex flex-wrap items-baseline justify-between gap-x-3"><strong>{{ note.author }}</strong><time class="text-sm text-[#52627A]">{{ note.date }}</time></div>
+            <p class="mt-1.5 text-sm leading-relaxed text-[#1B2B3F] whitespace-pre-line">{{ note.text }}</p>
+          </li>
+        } @empty {
+          <li class="p-8 border border-dashed border-[#CBD5E0] rounded-2xl text-center"><strong class="block text-sm">Nenhuma nota registrada</strong><p class="mt-1 text-sm text-[#52627A]">Registre a primeira evolução clínica de {{ patient.name }} acima.</p></li>
+        }
+      </ol>
+    </section>}
     </div>
   </div>
 }
