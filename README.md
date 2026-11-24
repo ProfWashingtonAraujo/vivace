@@ -122,6 +122,29 @@ ss -tln | grep -E ':(3000|3001)'
 
 Se a `VIVACE_API_PORT` estiver ocupada por outro servidor, o check-in no celular vai exibir "não foi sincronizado": o frontend cai no servidor alheio, que responde 404 em `/api/state`, e o salvamento é descartado. Use outra porta em `VIVACE_API_PORT`.
 
+## Publicação (Vercel + Render + Neon)
+
+O front é estático e vai para a Vercel. A API (`server.mjs`) é um servidor Node de longa duração, com conexões de eventos abertas, e por isso roda no Render. O banco é um Postgres no Neon.
+
+**1. Neon.** Crie o projeto e copie a conexão **direta** (sem `-pooler`): a API usa variáveis de sessão do RLS dentro de transações e as migrações usam trava consultiva.
+
+**2. Render (API).** Web service Node a partir deste repositório:
+
+- Build: `npm ci`
+- Start: `npm run start:hosted` (aplica as migrações, define a senha do papel `vivace_api` e carrega `db/seed/demo-state.json` só se o banco estiver vazio; depois sobe a API)
+- Variáveis:
+  - `MIGRATION_DATABASE_URL`: conexão do dono do banco (por exemplo `neondb_owner`).
+  - `DATABASE_URL`: `postgresql://vivace_api:<senha-nova>@<host-direto>/neondb?sslmode=require`. A senha é definida por você aqui; o provisionamento a aplica ao papel.
+  - `VIVACE_SKIP_FRONTEND=true`
+  - `VIVACE_API_PORT`: a porta que o Render informa em `PORT` (padrão `10000`).
+  - `VIVACE_ALLOWED_ORIGINS`: a URL pública do front na Vercel, com `https://`, sem barra no fim.
+  - `VIVACE_BOOTSTRAP_PASSWORD`: troque a senha padrão da administração.
+  - `VIVACE_SEED_DEMO=false` se não quiser os dados de demonstração.
+
+**3. Vercel (front).** Projeto ligado a este repositório. O `vercel.json` já define o build (`npm run build:vercel`) e a saída (`dist/browser`). Defina a variável `VIVACE_API_URL` com a URL pública da API no Render (sem barra no fim); ela é gravada no bundle em tempo de build e o build falha se ela faltar. Depois de mudar a URL da API é preciso um novo deploy.
+
+Observação: no plano gratuito do Render a API hiberna após alguns minutos sem uso e a primeira requisição demora cerca de um minuto.
+
 ## Autenticação e API
 
 Toda rota exige um token de sessão (`Authorization: Bearer <token>`), emitido por `POST /api/auth/login` com usuário e senha. A senha é comparada com `scrypt` e nunca trafega nem é devolvida pela API.

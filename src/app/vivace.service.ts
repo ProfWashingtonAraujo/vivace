@@ -9,6 +9,11 @@ const SYNC_PENDING_STORAGE_KEY = 'vivace_sync_pending_v1';
 const SYNC_INTERVAL_MS = 3_000;
 
 declare const VIVACE_API_PORT: string;
+// Public API origin for hosted builds (scripts/build-vercel.mjs). Unset in local development.
+declare const VIVACE_API_URL: string;
+
+const apiBase = (): string =>
+  typeof VIVACE_API_URL === 'string' ? VIVACE_API_URL.replace(/\/+$/, '') : '';
 
 const apiPort = (): string =>
   typeof VIVACE_API_PORT === 'string' && VIVACE_API_PORT.length > 0 ? VIVACE_API_PORT : '3001';
@@ -592,7 +597,8 @@ export class VivaceService {
   }
 
   private apiUrl(path = '/api/state'): string {
-    return `${location.protocol}//${location.hostname}:${apiPort()}${path}`;
+    const base = apiBase();
+    return base ? `${base}${path}` : `${location.protocol}//${location.hostname}:${apiPort()}${path}`;
   }
 
   private authHeaders(): Record<string, string> {
