@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, input, output, signal } from '@angular/core';
+import { afterRenderEffect, ChangeDetectionStrategy, Component, computed, ElementRef, inject, input, output, signal, viewChild } from '@angular/core';
 import { Tab, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
 import { FormsModule } from '@angular/forms';
 import type { Options } from 'highcharts';
@@ -34,6 +34,17 @@ export class PatientRecordComponent {
   readonly patientId = input.required<string>();
   readonly back = output<void>();
   readonly vivace = inject(VivaceService);
+  readonly chatScroll = viewChild<ElementRef<HTMLElement>>('chatScroll');
+  readonly chatSuggestions = ['Mantenha repouso e beba bastante água.', 'Envie uma foto do curativo pelo portal.', 'Vamos agendar o seu retorno. Qual o melhor horário?'];
+
+  constructor() {
+    // Keep the newest message in view when the tab opens and whenever a message arrives.
+    afterRenderEffect(() => {
+      const count = this.patient().messages.length;
+      const element = this.chatScroll()?.nativeElement;
+      if (element && count >= 0) element.scrollTop = element.scrollHeight;
+    });
+  }
   readonly activeTab = signal<RecordTab>('wounds');
   readonly selectedPhotoId = signal<string | null>(null);
   readonly reviewVerdict = signal<'avaliado_adequado' | 'requer_atencao'>('avaliado_adequado');

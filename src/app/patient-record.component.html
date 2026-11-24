@@ -194,7 +194,27 @@
     </div>
 
     <div ngTabPanel value="chat">
-    @if (activeTab() === 'chat') {<section class="content-card"><h2 class="font-bold">Canal direto com {{ patient.name }}</h2><p class="mt-1 text-xs text-[#52627A]">Conversa atualizada em tempo real</p><div aria-live="polite" class="space-y-3 max-h-96 overflow-y-auto py-4">@for (message of patient.messages; track message.id) {<div class="flex" [class.justify-end]="message.sender === 'equipe'"><div class="max-w-lg p-3 rounded-2xl text-xs" [class.bg-[#0B5CAB]]="message.sender === 'equipe'" [class.text-white]="message.sender === 'equipe'" [class.bg-[#F8FAFC]]="message.sender === 'paciente'"><strong class="block text-xs opacity-90">{{ message.senderName }} · {{ message.timestamp }}</strong>{{ message.text }}</div></div>}</div>@if (chatError()) {<p role="alert" class="mb-3 text-xs font-bold text-[#BE123C]">{{ chatError() }}</p>}<form (ngSubmit)="sendChat()" class="flex gap-2"><input name="chat" [(ngModel)]="chatMessage" [disabled]="sendingChat()" placeholder="Escreva uma orientação..." class="flex-1 px-4 py-3 bg-[#F8FAFC] border border-[#D9E2EC] rounded-xl text-sm disabled:opacity-60" /><button [disabled]="sendingChat()" class="px-5 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold disabled:opacity-60">{{ sendingChat() ? 'Enviando...' : 'Enviar' }}</button></form></section>}
+    @if (activeTab() === 'chat') {<section class="content-card p-0 overflow-hidden">
+      <header class="flex items-center gap-3 p-4 sm:px-5 border-b border-[#D9E2EC]"><img [src]="patient.avatar" [alt]="patient.name" class="w-10 h-10 rounded-xl object-cover" /><div><h2 class="font-bold leading-tight">{{ patient.name }}</h2><p class="text-sm text-[#52627A]">Canal direto · atualizado em tempo real</p></div></header>
+      <div #chatScroll aria-live="polite" aria-label="Mensagens" class="h-[26rem] max-h-[60vh] overflow-y-auto p-4 sm:p-5 bg-[#F4F7FA] space-y-1">
+        @for (message of patient.messages; track message.id; let index = $index) {
+          @let team = message.sender === 'equipe';
+          @let newSender = index === 0 || patient.messages[index - 1].sender !== message.sender;
+          <div class="flex flex-col" [class.items-end]="team" [class.items-start]="!team" [class.pt-3]="newSender && index > 0">
+            @if (newSender) {<span class="mb-1 px-1 text-sm font-semibold text-[#1B2B3F]">{{ team ? message.senderName : patient.name }}</span>}
+            <div class="max-w-[85%] sm:max-w-lg px-3.5 py-2.5 text-sm leading-relaxed rounded-2xl" [class.bg-[#0B5CAB]]="team" [class.text-white]="team" [class.rounded-tr-md]="team && !newSender" [class.bg-white]="!team" [class.border]="!team" [class.border-[#D9E2EC]]="!team" [class.rounded-tl-md]="!team && !newSender">
+              {{ message.text }}
+              <time class="block mt-1 text-xs" [class.text-blue-100]="team" [class.text-[#52627A]]="!team">{{ message.timestamp }}</time>
+            </div>
+          </div>
+        } @empty {
+          <div class="h-full grid place-items-center text-center"><div><strong class="block">Nenhuma mensagem ainda</strong><p class="mt-1 text-sm text-[#52627A]">Escreva abaixo para iniciar a conversa com {{ patient.name }}.</p></div></div>
+        }
+      </div>
+      @if (chatError()) {<p role="alert" class="px-4 sm:px-5 pt-3 text-sm font-bold text-[#BE123C]">{{ chatError() }}</p>}
+      <div class="px-4 sm:px-5 pt-3 flex gap-2 overflow-x-auto" aria-label="Respostas rápidas">@for (suggestion of chatSuggestions; track suggestion) {<button type="button" (click)="chatMessage = suggestion" [disabled]="sendingChat()" class="shrink-0 px-3 py-1.5 bg-white border border-[#D9E2EC] hover:border-[#0B5CAB] rounded-lg text-sm text-[#1B2B3F] disabled:opacity-60">{{ suggestion }}</button>}</div>
+      <form (ngSubmit)="sendChat()" class="p-4 sm:p-5 flex gap-2"><input name="chat" [(ngModel)]="chatMessage" [disabled]="sendingChat()" maxlength="2000" aria-label="Mensagem para o paciente" placeholder="Escreva uma orientação..." class="flex-1 min-w-0 px-4 py-3 bg-[#F8FAFC] border border-[#D9E2EC] rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#0B5CAB]/60 disabled:opacity-60" /><button type="submit" [disabled]="sendingChat() || !chatMessage.trim()" class="px-5 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold disabled:opacity-60">{{ sendingChat() ? 'Enviando...' : 'Enviar' }}</button></form>
+    </section>}
     </div>
 
     <div ngTabPanel value="notes">
