@@ -84,6 +84,20 @@ export class PatientRecordComponent {
 
   readonly patient = computed(() => this.vivace.patients().find(item => item.id === this.patientId()) ?? this.vivace.patients()[0]);
   readonly timelineEvents = computed(() => [...this.patient().timeline].reverse());
+  /** Events grouped by calendar day, newest first, so each row only needs the time. */
+  readonly timelineDays = computed(() => {
+    const groups: { date: string; events: { event: TimelineEvent; time: string }[] }[] = [];
+    for (const event of this.timelineEvents()) {
+      const [date, time = ''] = event.date.split(' ');
+      let group = groups.at(-1);
+      if (!group || group.date !== date) {
+        group = { date, events: [] };
+        groups.push(group);
+      }
+      group.events.push({ event, time });
+    }
+    return groups;
+  });
   readonly timelineKinds: Record<TimelineEvent['type'], { label: string; color: string; icon: string }> = {
     cirurgia: { label: 'Cirurgia', color: '#0B2A4A', icon: 'M12 3v18M5 8l7-5 7 5M7 21h10' },
     alta: { label: 'Alta', color: '#1F7A5C', icon: 'M5 12l5 5L20 7' },

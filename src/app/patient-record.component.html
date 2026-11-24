@@ -73,26 +73,28 @@
     </div>
 
     <div ngTabPanel value="timeline">
-    @if (activeTab() === 'timeline') {<section class="content-card"><h2 class="font-bold mb-1">Linha do tempo pós-operatória</h2><p class="text-xs text-[#52627A] mb-5">Do evento mais recente ao mais antigo.</p>
-      <ol>
-        @for (event of timelineEvents(); track event.id; let last = $last) {
-          <li class="flex gap-4">
-            <div class="flex flex-col items-center">
-              <span class="w-9 h-9 shrink-0 rounded-full grid place-items-center text-white" [style.background-color]="timelineKinds[event.type].color" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4.5 h-4.5"><path [attr.d]="timelineKinds[event.type].icon"/></svg></span>
-              @if (!last) {<span class="w-0.5 grow bg-[#D9E2EC] my-1"></span>}
-            </div>
-            <article class="flex-1 min-w-0" [class.pb-6]="!last">
-              <div class="flex flex-wrap items-baseline justify-between gap-x-3">
-                <div class="flex items-center gap-2"><span class="text-xs font-bold" [style.color]="timelineKinds[event.type].color">{{ timelineKinds[event.type].label }}</span><span class="px-2 py-0.5 rounded-md bg-[#E6F0FA] text-xs font-bold text-[#0B5CAB]">{{ event.dayLabel }}</span></div>
-                <time class="text-xs text-[#52627A]">{{ event.date }}</time>
+    @if (activeTab() === 'timeline') {<section class="content-card p-4 sm:p-6">
+      <h2 class="font-bold">Linha do tempo pós-operatória</h2><p class="text-sm text-[#52627A] mt-1 mb-5">Do evento mais recente ao mais antigo.</p>
+      @for (day of timelineDays(); track day.date) {
+        <h3 class="text-sm font-bold text-[#0B2A4A] mb-3" [class.mt-6]="!$first">{{ day.date }}</h3>
+        <ol>
+          @for (item of day.events; track item.event.id; let last = $last) {
+            <li class="flex gap-3 sm:gap-4">
+              <div class="flex flex-col items-center">
+                <span class="w-8 h-8 sm:w-9 sm:h-9 shrink-0 rounded-full grid place-items-center text-white" [style.background-color]="timelineKinds[item.event.type].color" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path [attr.d]="timelineKinds[item.event.type].icon"/></svg></span>
+                @if (!last) {<span class="w-0.5 grow bg-[#D9E2EC] my-1"></span>}
               </div>
-              <h3 class="font-semibold mt-1">{{ event.title }}</h3>
-              <p class="text-sm text-[#52627A] mt-1">{{ event.description }}</p>
-              <small class="block text-xs text-[#52627A] mt-1.5">Registrado por {{ event.author }}</small>
-            </article>
-          </li>
-        }
-      </ol></section>}
+              <article class="flex-1 min-w-0" [class.pb-5]="!last">
+                <div class="flex items-center gap-2"><span class="text-sm font-bold" [style.color]="timelineKinds[item.event.type].color">{{ timelineKinds[item.event.type].label }}</span><span class="px-2 py-0.5 rounded-md bg-[#E6F0FA] text-xs font-bold text-[#0B5CAB]">{{ item.event.dayLabel }}</span></div>
+                <h4 class="font-semibold mt-1 leading-snug">{{ item.event.title }}</h4>
+                <p class="text-sm text-[#52627A] mt-1">{{ item.event.description }}</p>
+                <p class="text-sm text-[#52627A] mt-1.5">@if (item.time) {<time>{{ item.time }}</time> · }{{ item.event.author }}</p>
+              </article>
+            </li>
+          }
+        </ol>
+      }
+    </section>}
     </div>
 
     <div ngTabPanel value="vitals">
