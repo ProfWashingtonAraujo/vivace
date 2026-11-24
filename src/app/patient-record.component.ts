@@ -45,6 +45,8 @@ export class PatientRecordComponent {
       untracked(() => {
         if (id === this.reviewedPhotoId) return;
         this.reviewedPhotoId = id;
+        this.photoExpanded.set(false);
+        this.editingReview.set(false);
         this.reviewVerdict.set(photo && photo.reviewStatus !== 'pendente' ? photo.reviewStatus : null);
         this.reviewComment.set(photo?.reviewFeedback ?? '');
       });
@@ -63,6 +65,8 @@ export class PatientRecordComponent {
     avaliado_adequado: 'Aspecto cicatricial favorável, sem sinais de infecção. Manter os cuidados habituais.',
     requer_atencao: 'Há sinais que precisam de avaliação. Mantenha o curativo limpo e seco e avise a equipe se houver febre, secreção ou aumento da dor.'
   } as const;
+  readonly photoExpanded = signal(false);
+  readonly editingReview = signal(false);
   private reviewedPhotoId: string | null = null;
   readonly reviewComment = signal('');
   readonly savedMessage = signal('');
@@ -290,6 +294,7 @@ export class PatientRecordComponent {
     const verdict = this.reviewVerdict();
     if (!photo || !verdict || !this.reviewComment().trim()) return;
     this.vivace.reviewWoundPhoto(this.patient().id, photo.id, verdict, this.reviewComment());
+    this.editingReview.set(false);
     this.savedMessage.set('Parecer registrado e disponibilizado ao paciente.');
     window.setTimeout(() => this.savedMessage.set(''), 3000);
   }

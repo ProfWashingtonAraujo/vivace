@@ -42,11 +42,14 @@
           <p class="text-sm text-[#52627A] mb-4">{{ woundPhotos().length ? woundPhotos().length + (woundPhotos().length === 1 ? ' foto enviada' : ' fotos enviadas') + (pendingPhotoCount() ? ' · ' + pendingPhotoCount() + ' aguardando parecer' : ' · todas avaliadas') : 'Acompanhamento visual da cicatrização.' }}</p>
           @if (selectedPhoto(); as photo) {
             <figure class="rounded-2xl overflow-hidden border border-[#D9E2EC] bg-[#F8FAFC]">
-              <img [src]="photo.imageUrl" [alt]="'Ferida cirúrgica, ' + photo.dayLabel" class="w-full max-h-96 object-contain bg-[#0B2A4A]" />
+              <button type="button" (click)="photoExpanded.set(!photoExpanded())" [attr.aria-label]="photoExpanded() ? 'Reduzir foto' : 'Ampliar foto'" class="relative block w-full bg-[#0B2A4A]">
+                <img [src]="photo.imageUrl" [alt]="'Ferida cirúrgica, ' + photo.dayLabel" class="w-full object-contain" [class.max-h-72]="!photoExpanded()" [class.sm:max-h-96]="!photoExpanded()" [class.max-h-[80vh]]="photoExpanded()" />
+                <span class="absolute right-2 bottom-2 px-2.5 py-1 rounded-md bg-[#0B2A4A]/80 text-white text-xs font-bold">{{ photoExpanded() ? 'Reduzir' : 'Ampliar' }}</span>
+              </button>
               <figcaption class="p-4 space-y-3">
                 <div class="flex flex-wrap items-center justify-between gap-2"><strong>{{ photo.dayLabel }} · {{ photo.date }}</strong><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-bold" [class.bg-[#FEF3C7]]="photo.reviewStatus === 'pendente'" [class.text-[#92400E]]="photo.reviewStatus === 'pendente'" [class.bg-[#D1FAE5]]="photo.reviewStatus === 'avaliado_adequado'" [class.text-[#065F46]]="photo.reviewStatus === 'avaliado_adequado'" [class.bg-[#FFE5E0]]="photo.reviewStatus === 'requer_atencao'" [class.text-[#C2412D]]="photo.reviewStatus === 'requer_atencao'">{{ photo.reviewStatus === 'pendente' ? 'Aguardando parecer' : photo.reviewStatus === 'avaliado_adequado' ? 'Adequada' : 'Requer atenção' }}</span></div>
                 <p class="text-sm"><strong>Relato do paciente:</strong>&nbsp;<span class="text-[#52627A]">{{ photo.patientNotes || 'Sem observações.' }}</span></p>
-                @if (photo.reviewFeedback) {<div class="p-3 bg-white border border-[#D9E2EC] rounded-xl text-sm"><strong>Parecer de {{ photo.reviewedBy }}</strong>@if (photo.reviewedAt) {<span class="text-[#52627A]"> · {{ photo.reviewedAt }}</span>}<p class="mt-1 text-[#52627A]">{{ photo.reviewFeedback }}</p></div>}
+                @if (photo.reviewFeedback) {<div class="p-3 bg-white border border-[#D9E2EC] rounded-xl text-sm"><strong>Parecer de {{ photo.reviewedBy }}</strong>@if (photo.reviewedAt) {<span class="block text-[#52627A]">{{ photo.reviewedAt }}</span>}<p class="mt-1 text-[#52627A]">{{ photo.reviewFeedback }}</p></div>}
               </figcaption>
             </figure>
             @if (woundPhotos().length > 1) {
@@ -56,7 +59,7 @@
             <div class="p-8 rounded-2xl border border-dashed border-[#CBD5E0] bg-[#F8FAFC] text-center"><strong class="block text-sm text-[#1B2B3F]">Nenhuma foto enviada</strong><p class="mt-1 text-sm text-[#52627A]">Quando {{ patient.name }} enviar uma foto do curativo pelo portal, ela aparecerá aqui para o seu parecer.</p></div>
           }
         </section>
-        @if (selectedPhoto()) {
+        @if (selectedPhoto() && (selectedPhoto().reviewStatus === 'pendente' || editingReview())) {
           <section class="lg:col-span-5 bg-white rounded-3xl p-5 sm:p-6 border border-[#D9E2EC] shadow-sm self-start">
             <h2 class="font-bold">Parecer clínico da ferida</h2><p class="text-sm text-[#52627A] mb-4">Classifique a foto de {{ selectedPhoto().dayLabel }} e envie uma orientação ao paciente.</p>
             <div class="grid grid-cols-2 gap-2" role="group" aria-label="Classificação da ferida"><button type="button" (click)="reviewVerdict.set('avaliado_adequado')" [attr.aria-pressed]="reviewVerdict() === 'avaliado_adequado'" class="review-choice" [class.selected-review]="reviewVerdict() === 'avaliado_adequado'">Adequada<small>Sem complicações</small></button><button type="button" (click)="reviewVerdict.set('requer_atencao')" [attr.aria-pressed]="reviewVerdict() === 'requer_atencao'" class="review-choice" [class.selected-review-alert]="reviewVerdict() === 'requer_atencao'">Requer atenção<small>Necessita avaliação</small></button></div>
@@ -66,6 +69,13 @@
             <button type="button" (click)="saveReview()" [disabled]="!reviewVerdict() || !reviewComment().trim()" class="w-full mt-4 py-3 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold disabled:opacity-60">Gravar parecer e notificar paciente</button>
             @if (!reviewVerdict()) {<p class="mt-2 text-sm text-[#52627A]">Escolha a classificação para poder gravar o parecer.</p>}
             @if (savedMessage()) {<p role="status" class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-sm font-bold text-[#065F46]">{{ savedMessage() }}</p>}
+          </section>
+        } @else if (selectedPhoto()) {
+          <section class="lg:col-span-5 bg-white rounded-3xl p-5 sm:p-6 border border-[#D9E2EC] shadow-sm self-start">
+            <h2 class="font-bold">Parecer clínico da ferida</h2>
+            <p class="text-sm text-[#52627A] mt-1">A foto de {{ selectedPhoto().dayLabel }} já tem parecer registrado e disponível para o paciente.</p>
+            @if (savedMessage()) {<p role="status" class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-sm font-bold text-[#065F46]">{{ savedMessage() }}</p>}
+            <button type="button" (click)="editingReview.set(true)" class="w-full mt-4 py-3 border border-[#0B5CAB] text-[#0B5CAB] hover:bg-[#E6F0FA] rounded-xl text-sm font-bold">Alterar parecer</button>
           </section>
         }
       </div>
