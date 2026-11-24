@@ -22,8 +22,8 @@ export class AuthComponent {
   readonly showPassword = signal(false);
   readonly loginError = signal('');
   readonly loginModel = signal<LoginModel>({
-    username: 'Rafaely Carvalho',
-    password: 'vivace-demo',
+    username: '',
+    password: '',
     rememberMe: true
   });
   readonly loginForm = form(this.loginModel, path => {
@@ -34,10 +34,8 @@ export class AuthComponent {
   selectTab(role: UserRole): void {
     this.tab.set(role);
     this.loginError.set('');
-    this.loginModel.update(model => ({
-      ...model,
-      username: role === 'professional' ? 'Rafaely Carvalho' : role === 'patient' ? 'mariana' : 'admin@vivace.med.br'
-    }));
+    // Switching profile starts from an empty form; no credentials are ever pre-filled.
+    this.loginModel.update(model => ({ ...model, username: '', password: '' }));
   }
 
   login(event: Event): void {
