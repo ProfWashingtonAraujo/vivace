@@ -64,6 +64,36 @@ export class PatientRecordComponent {
     mensagem: { label: 'Mensagem', color: '#52627A', icon: 'M4 5h16v11H9l-5 4z' },
     medicacao: { label: 'Medicação', color: '#6D4BC2', icon: 'M8 4h8l3 3v13H5V7zM9 12h6M12 9v6' }
   };
+  readonly medicationSummary = computed(() => {
+    const doses = this.patient().medications
+      .flatMap(medication => medication.times.map(time => ({ name: medication.name, dose: medication.dose, time, taken: !!medication.takenToday[time] })))
+      .sort((first, second) => this.doseOrder(first.time).localeCompare(this.doseOrder(second.time)));
+    const taken = doses.filter(dose => dose.taken).length;
+    const pending = doses.filter(dose => !dose.taken);
+    const nowTime = this.currentTime();
+    return {
+      total: doses.length,
+      taken,
+      percent: doses.length ? Math.round(taken / doses.length * 100) : 100,
+      late: pending.filter(dose => this.doseOrder(dose.time) < nowTime).length,
+      next: pending.find(dose => this.doseOrder(dose.time) >= nowTime) ?? null
+    };
+  });
+
+  doseState(medication: MedicationItem, time: string): 'tomada' | 'atrasada' | 'pendente' {
+    if (medication.takenToday[time]) return 'tomada';
+    return this.doseOrder(time) < this.currentTime() ? 'atrasada' : 'pendente';
+  }
+
+  /** A 00:00 dose belongs to the end of the day, not the start. */
+  private doseOrder(time: string): string {
+    return time === '00:00' ? '24:00' : time;
+  }
+
+  private currentTime(): string {
+    return new Date().toTimeString().slice(0, 5);
+  }
+
   readonly woundPhotos = computed(() => this.patient().woundPhotos.filter(photo => !photo.imageUrl.includes('images.unsplash.com')));
   readonly selectedPhoto = computed(() => {
     const photos = this.woundPhotos();
