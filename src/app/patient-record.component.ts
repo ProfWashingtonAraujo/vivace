@@ -119,25 +119,44 @@ export class PatientRecordComponent {
   });
   readonly temperatureChartOptions = computed<Options>(() => {
     const checkIns = this.chronologicalCheckIns();
+    const level = (temperature: number) => temperature >= 37.8 ? { label: 'Febre', color: '#C2412D' } : temperature >= 37.3 ? { label: 'Febrícula', color: '#B45309' } : { label: 'Normal', color: '#1F7A5C' };
+    const format = (value: number) => value.toFixed(1).replace('.', ',');
+    const last = checkIns.at(-1);
+    const previous = checkIns.at(-2);
+    const delta = last && previous ? Math.round((last.temperature - previous.temperature) * 10) / 10 : 0;
+    const trend = !previous ? '' : delta === 0 ? ' · igual ao registro anterior' : ` · ${delta < 0 ? 'queda' : 'alta'} de ${format(Math.abs(delta))}°C desde o registro anterior`;
+    const max = Math.max(39, Math.ceil(Math.max(...checkIns.map(item => item.temperature), 0) + 0.5));
     return {
-      chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 8, 8, 8] },
+      chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 12, 8, 8] },
       title: { text: 'Curva de temperatura', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
-      subtitle: { text: 'Medição axilar em °C', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
-      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC' },
+      subtitle: { text: last ? `Último registro: ${format(last.temperature)}°C (${level(last.temperature).label.toLowerCase()}) em ${last.dayLabel}${trend}` : 'Sem registros de temperatura', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
+      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
       yAxis: {
-        min: 35,
-        max: 40,
-        tickInterval: 1,
+        min: 35.5,
+        max,
+        tickInterval: 0.5,
         title: { text: '' },
-        gridLineColor: '#D9E2EC',
-        plotLines: [{ value: 37.8, color: '#FF7F66', dashStyle: 'Dash', width: 2, label: { text: 'Limite 37,8°C', align: 'right', x: -4, y: -6, style: { color: '#C2412D', fontSize: '12px' } } }]
+        gridLineColor: '#E6ECF2',
+        labels: { format: '{value:.1f}', style: { color: '#52627A', fontSize: '12px' } },
+        plotBands: [
+          { from: 35.5, to: 37.25, color: 'rgba(31,122,92,0.07)', label: { text: 'Normal', align: 'right', x: -6, y: -4, verticalAlign: 'bottom', style: { color: '#1F7A5C', fontSize: '12px' } } },
+          { from: 37.25, to: 37.75, color: 'rgba(180,83,9,0.09)' },
+          { from: 37.75, to: max, color: 'rgba(194,65,45,0.08)', label: { text: 'Febre (≥ 37,8°C)', align: 'right', x: -6, y: 16, style: { color: '#C2412D', fontSize: '12px' } } }
+        ]
       },
-      tooltip: { valueSuffix: '°C', valueDecimals: 1 },
+      tooltip: {
+        formatter() {
+          const point = this as unknown as { x: string; y: number };
+          const item = checkIns.find(entry => entry.dayLabel === point.x);
+          return `${point.x}${item ? ` · ${item.date}` : ''} — ${format(point.y)}°C (${level(point.y).label.toLowerCase()})`;
+        }
+      },
       legend: { enabled: false },
       credits: { enabled: false },
-      accessibility: { description: 'Gráfico da evolução da temperatura axilar informada pelo paciente em cada check-in.' },
-      plotOptions: { series: { marker: { enabled: true, radius: 4 }, lineWidth: 3 } },
-      series: [{ name: 'Temperatura', type: 'spline', color: '#0B5CAB', data: checkIns.map(item => item.temperature) }]
+      accessibility: { description: `Gráfico da temperatura axilar em cada check-in. ${checkIns.map(item => `${item.dayLabel}: ${format(item.temperature)} graus`).join('; ')}.` },
+      plotOptions: { series: { lineWidth: 3, marker: { enabled: true, radius: 6, lineWidth: 2, lineColor: '#FFFFFF' }, dataLabels: { enabled: true, y: -4, style: { color: '#1B2B3F', fontSize: '12px', fontWeight: '700', textOutline: 'none' }, formatter() { return format(this.y ?? 0); } } },
+      },
+      series: [{ name: 'Temperatura', type: 'spline', color: '#0B5CAB', data: checkIns.map(item => ({ y: item.temperature, color: level(item.temperature).color })) }]
     };
   });
 
