@@ -36,23 +36,38 @@
 
     <div ngTabPanel value="wounds">
     @if (activeTab() === 'wounds') {
-      <div class="grid lg:grid-cols-12 gap-6">
-        <section class="lg:col-span-7 bg-white rounded-3xl p-5 border border-[#D9E2EC] shadow-sm">
-          <h2 class="font-bold">Registro fotográfico da ferida</h2><p class="text-xs text-[#52627A] mb-4">Acompanhamento visual da cicatrização.</p>
-          @if (woundPhotos().length) {
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">@for (photo of woundPhotos(); track photo.id) {<button type="button" (click)="selectPhoto(photo)" class="relative rounded-2xl overflow-hidden border-2" [class.border-[#0B5CAB]]="selectedPhoto().id === photo.id"><img [src]="photo.imageUrl" [alt]="photo.dayLabel" class="w-full h-28 object-cover" /><span class="absolute bottom-2 left-2 text-xs font-bold text-white drop-shadow">{{ photo.dayLabel }}</span><small class="absolute top-2 right-2 px-2 py-0.5 rounded-full bg-white/90 text-[#1B2B3F]">{{ photo.reviewStatus === 'pendente' ? 'Pendente' : 'Avaliada' }}</small></button>}</div>
+      <div class="grid gap-6" [class.lg:grid-cols-12]="woundPhotos().length">
+        <section class="bg-white rounded-3xl p-5 sm:p-6 border border-[#D9E2EC] shadow-sm" [class.lg:col-span-7]="woundPhotos().length">
+          <h2 class="font-bold">Registro fotográfico da ferida</h2>
+          <p class="text-sm text-[#52627A] mb-4">{{ woundPhotos().length ? woundPhotos().length + (woundPhotos().length === 1 ? ' foto enviada' : ' fotos enviadas') + (pendingPhotoCount() ? ' · ' + pendingPhotoCount() + ' aguardando parecer' : ' · todas avaliadas') : 'Acompanhamento visual da cicatrização.' }}</p>
+          @if (selectedPhoto(); as photo) {
+            <figure class="rounded-2xl overflow-hidden border border-[#D9E2EC] bg-[#F8FAFC]">
+              <img [src]="photo.imageUrl" [alt]="'Ferida cirúrgica, ' + photo.dayLabel" class="w-full max-h-96 object-contain bg-[#0B2A4A]" />
+              <figcaption class="p-4 space-y-3">
+                <div class="flex flex-wrap items-center justify-between gap-2"><strong>{{ photo.dayLabel }} · {{ photo.date }}</strong><span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-sm font-bold" [class.bg-[#FEF3C7]]="photo.reviewStatus === 'pendente'" [class.text-[#92400E]]="photo.reviewStatus === 'pendente'" [class.bg-[#D1FAE5]]="photo.reviewStatus === 'avaliado_adequado'" [class.text-[#065F46]]="photo.reviewStatus === 'avaliado_adequado'" [class.bg-[#FFE5E0]]="photo.reviewStatus === 'requer_atencao'" [class.text-[#C2412D]]="photo.reviewStatus === 'requer_atencao'">{{ photo.reviewStatus === 'pendente' ? 'Aguardando parecer' : photo.reviewStatus === 'avaliado_adequado' ? 'Adequada' : 'Requer atenção' }}</span></div>
+                <p class="text-sm"><strong>Relato do paciente:</strong>&nbsp;<span class="text-[#52627A]">{{ photo.patientNotes || 'Sem observações.' }}</span></p>
+                @if (photo.reviewFeedback) {<div class="p-3 bg-white border border-[#D9E2EC] rounded-xl text-sm"><strong>Parecer de {{ photo.reviewedBy }}</strong>@if (photo.reviewedAt) {<span class="text-[#52627A]"> · {{ photo.reviewedAt }}</span>}<p class="mt-1 text-[#52627A]">{{ photo.reviewFeedback }}</p></div>}
+              </figcaption>
+            </figure>
+            @if (woundPhotos().length > 1) {
+              <ul class="mt-4 grid grid-cols-3 sm:grid-cols-4 gap-3" aria-label="Fotos da ferida">@for (item of woundPhotos(); track item.id) {<li><button type="button" (click)="selectPhoto(item)" [attr.aria-pressed]="selectedPhoto().id === item.id" [attr.aria-label]="item.dayLabel + ', ' + (item.reviewStatus === 'pendente' ? 'aguardando parecer' : 'avaliada')" class="relative w-full rounded-xl overflow-hidden border-2" [class.border-[#0B5CAB]]="selectedPhoto().id === item.id" [class.border-transparent]="selectedPhoto().id !== item.id"><img [src]="item.imageUrl" alt="" class="w-full h-20 object-cover" /><span class="absolute inset-x-0 bottom-0 px-2 py-1 flex items-center justify-between text-xs font-bold text-white bg-[#0B2A4A]/80"><span>{{ item.dayLabel }}</span><span [class.text-[#FDE68A]]="item.reviewStatus === 'pendente'">{{ item.reviewStatus === 'pendente' ? 'Pendente' : 'Avaliada' }}</span></span></button></li>}</ul>
+            }
           } @else {
-            <div class="mb-5 p-6 rounded-2xl border border-dashed border-[#CBD5E0] bg-[#F8FAFC] text-center"><strong class="block text-sm text-[#1B2B3F]">Nenhuma foto enviada</strong><p class="mt-1 text-xs text-[#52627A]">As imagens enviadas pelo paciente aparecerão aqui.</p></div>
+            <div class="p-8 rounded-2xl border border-dashed border-[#CBD5E0] bg-[#F8FAFC] text-center"><strong class="block text-sm text-[#1B2B3F]">Nenhuma foto enviada</strong><p class="mt-1 text-sm text-[#52627A]">Quando {{ patient.name }} enviar uma foto do curativo pelo portal, ela aparecerá aqui para o seu parecer.</p></div>
           }
-          @if (selectedPhoto(); as photo) {<div class="p-4 bg-[#F8FAFC] rounded-2xl"><img [src]="photo.imageUrl" alt="Ferida cirúrgica" class="w-full max-h-80 object-contain rounded-xl bg-black" /><p class="text-xs mt-3"><strong>Relato:</strong> {{ photo.patientNotes || 'Sem observações.' }}</p>@if (photo.reviewFeedback) {<div class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs text-[#0B5CAB]"><strong>Parecer de {{ photo.reviewedBy }}</strong><p>{{ photo.reviewFeedback }}</p></div>}</div>}
         </section>
-        <section class="lg:col-span-5 bg-white rounded-3xl p-6 border border-[#D9E2EC] shadow-sm">
-          <h2 class="font-bold">Parecer clínico da ferida</h2><p class="text-xs text-[#52627A] mb-4">Classifique e envie uma orientação ao paciente.</p>
-          <div class="grid grid-cols-2 gap-2"><button type="button" (click)="reviewVerdict.set('avaliado_adequado')" class="review-choice" [class.selected-review]="reviewVerdict() === 'avaliado_adequado'">Adequado<small>Sem complicações</small></button><button type="button" (click)="reviewVerdict.set('requer_atencao')" class="review-choice" [class.selected-review-alert]="reviewVerdict() === 'requer_atencao'">Requer atenção<small>Necessita avaliação</small></button></div>
-          <textarea rows="6" [ngModel]="reviewComment()" (ngModelChange)="reviewComment.set($event)" class="w-full mt-4 p-3 bg-[#F8FAFC] border border-[#D9E2EC] rounded-xl text-xs"></textarea>
-          <button type="button" (click)="saveReview()" class="w-full mt-3 py-3 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">Gravar parecer e notificar paciente</button>
-          @if (savedMessage()) {<p class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#0B5CAB]">{{ savedMessage() }}</p>}
-        </section>
+        @if (selectedPhoto()) {
+          <section class="lg:col-span-5 bg-white rounded-3xl p-5 sm:p-6 border border-[#D9E2EC] shadow-sm self-start">
+            <h2 class="font-bold">Parecer clínico da ferida</h2><p class="text-sm text-[#52627A] mb-4">Classifique a foto de {{ selectedPhoto().dayLabel }} e envie uma orientação ao paciente.</p>
+            <div class="grid grid-cols-2 gap-2" role="group" aria-label="Classificação da ferida"><button type="button" (click)="reviewVerdict.set('avaliado_adequado')" [attr.aria-pressed]="reviewVerdict() === 'avaliado_adequado'" class="review-choice" [class.selected-review]="reviewVerdict() === 'avaliado_adequado'">Adequada<small>Sem complicações</small></button><button type="button" (click)="reviewVerdict.set('requer_atencao')" [attr.aria-pressed]="reviewVerdict() === 'requer_atencao'" class="review-choice" [class.selected-review-alert]="reviewVerdict() === 'requer_atencao'">Requer atenção<small>Necessita avaliação</small></button></div>
+            <label for="wound-review" class="block mt-4 text-sm font-bold">Orientação ao paciente</label>
+            <textarea id="wound-review" rows="5" [ngModel]="reviewComment()" (ngModelChange)="reviewComment.set($event)" placeholder="Descreva o aspecto da ferida e o que o paciente deve fazer" class="form-input resize-y"></textarea>
+            @if (reviewVerdict(); as verdict) {<button type="button" (click)="reviewComment.set(reviewTemplates[verdict])" class="mt-2 text-sm font-bold text-[#0B5CAB] hover:underline">Usar texto sugerido</button>}
+            <button type="button" (click)="saveReview()" [disabled]="!reviewVerdict() || !reviewComment().trim()" class="w-full mt-4 py-3 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold disabled:opacity-60">Gravar parecer e notificar paciente</button>
+            @if (!reviewVerdict()) {<p class="mt-2 text-sm text-[#52627A]">Escolha a classificação para poder gravar o parecer.</p>}
+            @if (savedMessage()) {<p role="status" class="mt-3 p-3 bg-[#D1FAE5] rounded-xl text-sm font-bold text-[#065F46]">{{ savedMessage() }}</p>}
+          </section>
+        }
       </div>
     }
     </div>

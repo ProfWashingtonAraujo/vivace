@@ -1,4 +1,4 @@
-import { afterRenderEffect, ChangeDetectionStrategy, Component, computed, ElementRef, inject, input, output, signal, viewChild } from '@angular/core';
+import { afterRenderEffect, ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, input, output, signal, untracked, viewChild } from '@angular/core';
 import { Tab, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
 import { FormsModule } from '@angular/forms';
 import type { Options } from 'highcharts';
@@ -38,6 +38,17 @@ export class PatientRecordComponent {
   readonly chatSuggestions = ['Mantenha repouso e beba bastante água.', 'Envie uma foto do curativo pelo portal.', 'Vamos agendar o seu retorno. Qual o melhor horário?'];
 
   constructor() {
+    // Start each photo with an empty draft (or its saved review); never pre-fill a verdict.
+    effect(() => {
+      const photo = this.selectedPhoto();
+      const id = photo?.id ?? null;
+      untracked(() => {
+        if (id === this.reviewedPhotoId) return;
+        this.reviewedPhotoId = id;
+        this.reviewVerdict.set(photo && photo.reviewStatus !== 'pendente' ? photo.reviewStatus : null);
+        this.reviewComment.set(photo?.reviewFeedback ?? '');
+      });
+    });
     // Keep the newest message in view when the tab opens and whenever a message arrives.
     afterRenderEffect(() => {
       const count = this.patient().messages.length;
@@ -47,8 +58,13 @@ export class PatientRecordComponent {
   }
   readonly activeTab = signal<RecordTab>('wounds');
   readonly selectedPhotoId = signal<string | null>(null);
-  readonly reviewVerdict = signal<'avaliado_adequado' | 'requer_atencao'>('avaliado_adequado');
-  readonly reviewComment = signal('Aspecto cicatricial favorável, sem sinais de infecção. Manter os cuidados habituais.');
+  readonly reviewVerdict = signal<'avaliado_adequado' | 'requer_atencao' | null>(null);
+  readonly reviewTemplates = {
+    avaliado_adequado: 'Aspecto cicatricial favorável, sem sinais de infecção. Manter os cuidados habituais.',
+    requer_atencao: 'Há sinais que precisam de avaliação. Mantenha o curativo limpo e seco e avise a equipe se houver febre, secreção ou aumento da dor.'
+  } as const;
+  private reviewedPhotoId: string | null = null;
+  readonly reviewComment = signal('');
   readonly savedMessage = signal('');
   readonly noteMessage = signal('');
   readonly showMedicationForm = signal(false);
@@ -120,6 +136,7 @@ export class PatientRecordComponent {
     return [...list.filter(item => item.important), ...list.filter(item => !item.important)];
   });
   readonly importantInstructionCount = computed(() => this.patient().instructions.filter(item => item.important).length);
+  readonly pendingPhotoCount = computed(() => this.woundPhotos().filter(photo => photo.reviewStatus === 'pendente').length);
   readonly woundPhotos = computed(() => this.patient().woundPhotos.filter(photo => !photo.imageUrl.includes('images.unsplash.com')));
   readonly selectedPhoto = computed(() => {
     const photos = this.woundPhotos();
@@ -218,13 +235,13 @@ export class PatientRecordComponent {
 
   selectPhoto(photo: WoundPhoto): void {
     this.selectedPhotoId.set(photo.id);
-    if (photo.reviewFeedback) this.reviewComment.set(photo.reviewFeedback);
   }
 
   saveReview(): void {
     const photo = this.selectedPhoto();
-    if (!photo || !this.reviewComment().trim()) return;
-    this.vivace.reviewWoundPhoto(this.patient().id, photo.id, this.reviewVerdict(), this.reviewComment());
+    const verdict = this.reviewVerdict();
+    if (!photo || !verdict || !this.reviewComment().trim()) return;
+    this.vivace.reviewWoundPhoto(this.patient().id, photo.id, verdict, this.reviewComment());
     this.savedMessage.set('Parecer registrado e disponibilizado ao paciente.');
     window.setTimeout(() => this.savedMessage.set(''), 3000);
   }
