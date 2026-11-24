@@ -59,7 +59,7 @@
 
   <section class="bg-white rounded-3xl border border-[#D9E2EC] shadow-sm" aria-label="Pacientes cadastrados">
     <div class="p-4 sm:p-5 border-b border-[#D9E2EC]">
-      <input type="search" [value]="searchQuery()" (input)="searchQuery.set($any($event.target).value)" placeholder="Buscar por nome, procedimento, hospital, CPF ou contato" aria-label="Buscar pacientes" class="form-input !mt-0" />
+      <input type="search" [value]="searchQuery()" (input)="searchQuery.set($any($event.target).value)" placeholder="Buscar paciente" aria-label="Buscar pacientes" class="form-input !mt-0" />
     </div>
     <ul class="divide-y divide-[#D9E2EC]">
       @for (patient of filteredPatients(); track patient.id) {

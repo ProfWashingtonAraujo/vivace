@@ -25,6 +25,11 @@ export class AppComponent {
     this.showAlerts.set(false);
   }
 
+  resetDemo(): void {
+    if (!window.confirm('Restaurar os dados de demonstração? Todos os pacientes, profissionais e registros atuais serão substituídos, para todos os aparelhos conectados.')) return;
+    this.vivace.resetToDefaults();
+  }
+
   logout(): void {
     this.viewingRecordId.set(null);
     this.showAlerts.set(false);

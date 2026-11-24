@@ -3,7 +3,7 @@ import { Tab, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
 import { FormsModule } from '@angular/forms';
 import type { Options } from 'highcharts';
 import { HighchartsChartDirective } from 'highcharts-angular';
-import { AlertSeverity, MedicationItem, PostOpInstruction, TimelineEvent, WoundPhoto } from '../types';
+import { AlertSeverity, DailyCheckIn, MedicationItem, PostOpInstruction, TimelineEvent, WoundPhoto } from '../types';
 import { VivaceService } from './vivace.service';
 
 type RecordTab = 'wounds' | 'timeline' | 'vitals' | 'meds' | 'care' | 'chat' | 'notes';
@@ -149,6 +149,12 @@ export class PatientRecordComponent {
     const day = (label: string) => Number(/\d+/.exec(label)?.[0] ?? 0);
     return [...this.patient().checkIns].reverse().sort((first, second) => day(first.dayLabel) - day(second.dayLabel));
   });
+  private checkInAxisLabel(item: DailyCheckIn, all: DailyCheckIn[]): string {
+    const repeated = all.filter(other => other.dayLabel === item.dayLabel).length > 1;
+    return repeated ? `${item.dayLabel} (${item.date.slice(0, 5)})` : item.dayLabel;
+  }
+
+  readonly recentCheckIns = computed(() => [...this.chronologicalCheckIns()].reverse());
   readonly painChartOptions = computed<Options>(() => {
     const checkIns = this.chronologicalCheckIns();
     const level = (pain: number) => pain >= 7 ? { label: 'Intensa', color: '#C2412D' } : pain >= 4 ? { label: 'Moderada', color: '#B45309' } : { label: 'Leve', color: '#1F7A5C' };
@@ -160,8 +166,8 @@ export class PatientRecordComponent {
       chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 12, 8, 8] },
       title: { text: 'Evolução da dor', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
       subtitle: { text: last ? `Último registro: ${last.painLevel}/10 (${level(last.painLevel).label.toLowerCase()}) em ${last.dayLabel}${trend}` : 'Sem registros de dor', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
-      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
-      yAxis: {
+      xAxis: { categories: checkIns.map(item => this.checkInAxisLabel(item, checkIns)), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
+      yAxis: [{
         min: 0,
         max: 10,
         tickInterval: 2,
@@ -169,17 +175,31 @@ export class PatientRecordComponent {
         gridLineColor: '#E6ECF2',
         labels: { style: { color: '#52627A', fontSize: '12px' } },
         plotBands: [
-          { from: 0, to: 3.5, color: 'rgba(31,122,92,0.07)', label: { text: 'Leve', align: 'right', x: -6, y: -4, verticalAlign: 'bottom', style: { color: '#1F7A5C', fontSize: '12px' } } },
-          { from: 3.5, to: 6.5, color: 'rgba(180,83,9,0.07)', label: { text: 'Moderada', align: 'right', x: -6, y: 16, style: { color: '#B45309', fontSize: '12px' } } },
-          { from: 6.5, to: 10, color: 'rgba(194,65,45,0.08)', label: { text: 'Intensa', align: 'right', x: -6, y: 16, style: { color: '#C2412D', fontSize: '12px' } } }
+          { from: 0, to: 3.5, color: 'rgba(31,122,92,0.07)' },
+          { from: 3.5, to: 6.5, color: 'rgba(180,83,9,0.07)' },
+          { from: 6.5, to: 10, color: 'rgba(194,65,45,0.08)' }
         ]
-      },
+      }, {
+        linkedTo: 0,
+        opposite: true,
+        title: { text: '' },
+        gridLineWidth: 0,
+        tickPositions: [1.75, 5, 8.25],
+        labels: {
+          useHTML: false,
+          formatter() {
+            const value = Number(this.value);
+            return value < 3.5 ? 'Leve' : value < 6.5 ? 'Moderada' : 'Intensa';
+          },
+          style: { color: '#52627A', fontSize: '12px' }
+        }
+      }],
       tooltip: {
         useHTML: false,
         formatter() {
-          const point = this as unknown as { x: string; y: number };
-          const item = checkIns.find(entry => entry.dayLabel === point.x);
-          return `${point.x}${item ? ` · ${item.date}` : ''} — Dor ${point.y}/10 (${level(point.y).label.toLowerCase()})`;
+          const point = this as unknown as { y: number; point: { index: number } };
+          const item = checkIns[point.point.index];
+          return `${item.dayLabel} · ${item.date} — Dor ${point.y}/10 (${level(point.y).label.toLowerCase()})`;
         }
       },
       legend: { enabled: false },
@@ -203,8 +223,8 @@ export class PatientRecordComponent {
       chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 12, 8, 8] },
       title: { text: 'Curva de temperatura', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
       subtitle: { text: last ? `Último registro: ${format(last.temperature)}°C (${level(last.temperature).label.toLowerCase()}) em ${last.dayLabel}${trend}` : 'Sem registros de temperatura', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
-      xAxis: { categories: checkIns.map(item => item.dayLabel), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
-      yAxis: {
+      xAxis: { categories: checkIns.map(item => this.checkInAxisLabel(item, checkIns)), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
+      yAxis: [{
         min: 35.5,
         max,
         tickInterval: 0.5,
@@ -212,16 +232,30 @@ export class PatientRecordComponent {
         gridLineColor: '#E6ECF2',
         labels: { format: '{value:.1f}', style: { color: '#52627A', fontSize: '12px' } },
         plotBands: [
-          { from: 35.5, to: 37.25, color: 'rgba(31,122,92,0.07)', label: { text: 'Normal', align: 'right', x: -6, y: -4, verticalAlign: 'bottom', style: { color: '#1F7A5C', fontSize: '12px' } } },
+          { from: 35.5, to: 37.25, color: 'rgba(31,122,92,0.07)' },
           { from: 37.25, to: 37.75, color: 'rgba(180,83,9,0.09)' },
-          { from: 37.75, to: max, color: 'rgba(194,65,45,0.08)', label: { text: 'Febre (≥ 37,8°C)', align: 'right', x: -6, y: 16, style: { color: '#C2412D', fontSize: '12px' } } }
+          { from: 37.75, to: max, color: 'rgba(194,65,45,0.08)' }
         ]
-      },
+      }, {
+        linkedTo: 0,
+        opposite: true,
+        title: { text: '' },
+        gridLineWidth: 0,
+        tickPositions: [36.4, 37.5, (37.75 + max) / 2],
+        labels: {
+          useHTML: false,
+          formatter() {
+            const value = Number(this.value);
+            return value < 37.25 ? 'Normal' : value < 37.75 ? 'Febrícula' : 'Febre';
+          },
+          style: { color: '#52627A', fontSize: '12px' }
+        }
+      }],
       tooltip: {
         formatter() {
-          const point = this as unknown as { x: string; y: number };
-          const item = checkIns.find(entry => entry.dayLabel === point.x);
-          return `${point.x}${item ? ` · ${item.date}` : ''} — ${format(point.y)}°C (${level(point.y).label.toLowerCase()})`;
+          const point = this as unknown as { y: number; point: { index: number } };
+          const item = checkIns[point.point.index];
+          return `${item.dayLabel} · ${item.date} — ${format(point.y)}°C (${level(point.y).label.toLowerCase()})`;
         }
       },
       legend: { enabled: false },

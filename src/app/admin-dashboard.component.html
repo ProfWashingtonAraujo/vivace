@@ -44,7 +44,7 @@
 
   <section class="bg-white rounded-3xl border border-[#D9E2EC] shadow-sm" aria-label="Profissionais cadastrados">
     <div class="p-4 sm:p-5 border-b border-[#D9E2EC]">
-      <input type="search" [value]="searchQuery()" (input)="searchQuery.set($any($event.target).value)" placeholder="Buscar por nome, especialidade, função ou registro" aria-label="Buscar profissionais" class="form-input !mt-0" />
+      <input type="search" [value]="searchQuery()" (input)="searchQuery.set($any($event.target).value)" placeholder="Buscar profissional" aria-label="Buscar profissionais" class="form-input !mt-0" />
     </div>
     <ul class="divide-y divide-[#D9E2EC]">
       @for (professional of filteredProfessionals(); track professional.id) {
