@@ -121,3 +121,10 @@ export interface ProfessionalUser {
   password?: string;
   specialty: string;
 }
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  password?: string;
+}

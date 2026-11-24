@@ -8,3 +8,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Cluster local do Postgres para desenvolvimento e testes.
+.pgdata/

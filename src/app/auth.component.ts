@@ -20,6 +20,7 @@ export class AuthComponent {
   readonly vivace = inject(VivaceService);
   readonly tab = signal<UserRole>('professional');
   readonly showPassword = signal(false);
+  readonly loginError = signal('');
   readonly loginModel = signal<LoginModel>({
     username: 'Rafaely Carvalho',
     password: 'vivace-demo',
@@ -32,20 +33,23 @@ export class AuthComponent {
 
   selectTab(role: UserRole): void {
     this.tab.set(role);
+    this.loginError.set('');
     this.loginModel.update(model => ({
       ...model,
-      username: role === 'professional' ? 'Rafaely Carvalho' : role === 'patient' ? 'mariana' : 'admin'
+      username: role === 'professional' ? 'Rafaely Carvalho' : role === 'patient' ? 'mariana' : 'admin@vivace.med.br'
     }));
   }
 
   login(event: Event): void {
     event.preventDefault();
+    this.loginError.set('');
     void submit(this.loginForm, async () => {
-      this.vivace.loginAs(
-        this.tab(),
-        this.tab() === 'patient' ? 'pat-1' : undefined,
+      const result = await this.vivace.login(
+        this.loginModel().username.trim(),
+        this.loginModel().password,
         this.loginModel().rememberMe
       );
+      if (!result.ok) this.loginError.set(result.message);
     });
   }
 }

@@ -33,6 +33,6 @@ export class AppComponent {
   logout(): void {
     this.viewingRecordId.set(null);
     this.showAlerts.set(false);
-    this.vivace.logout();
+    void this.vivace.logout();
   }
 }
