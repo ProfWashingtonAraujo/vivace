@@ -49,7 +49,7 @@
     <ul class="divide-y divide-[#D9E2EC]">
       @for (professional of filteredProfessionals(); track professional.id) {
         <li class="flex flex-wrap sm:flex-nowrap items-center gap-x-4 gap-y-3 p-4 sm:px-5">
-          <img [src]="professional.avatar" [alt]="professional.name" class="w-12 h-12 rounded-xl object-cover shrink-0" />
+          <img [src]="professional.avatar" [alt]="professional.name" class="w-12 h-12 rounded-xl object-cover shrink-0 bg-[#E6F0FA]" />
           <div class="min-w-0 flex-1 basis-48">
             <strong class="block">{{ professional.name }}</strong>
             <span class="block text-sm text-[#52627A]">{{ professional.role }} · {{ professional.specialty }}</span>

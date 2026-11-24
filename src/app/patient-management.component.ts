@@ -1,6 +1,6 @@
-import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { form, FormField, required, submit } from '@angular/forms/signals';
-import { Patient } from '../types';
+import { AlertSeverity, Patient } from '../types';
 import { VivaceService } from './vivace.service';
 
 interface PatientFormModel {
@@ -30,6 +30,15 @@ export class PatientManagementComponent {
   readonly feedbackMessage = signal('');
   readonly feedbackError = signal(false);
   readonly editingPatientId = signal<string | null>(null);
+  readonly formOpen = signal(false);
+  readonly searchQuery = signal('');
+  readonly filteredPatients = computed(() => {
+    const query = this.searchQuery().trim().toLowerCase();
+    const list = this.vivace.patients();
+    return query
+      ? list.filter(item => [item.name, item.procedure, item.hospital, item.cpf, item.email, item.phone].some(value => (value ?? '').toLowerCase().includes(query)))
+      : list;
+  });
   readonly patientAvatar = signal('');
   readonly processingAvatar = signal(false);
   readonly avatarError = signal('');
@@ -63,7 +72,21 @@ export class PatientManagementComponent {
     });
   }
 
+  startNewPatient(): void {
+    this.cancelPatientEdit();
+    this.formOpen.set(true);
+  }
+
+  statusLabel(status: AlertSeverity): string {
+    return status === 'critico' ? 'Alerta crítico' : status === 'atencao' ? 'Atenção' : 'Estável';
+  }
+
+  statusClasses(status: AlertSeverity): string {
+    return status === 'critico' ? 'bg-[#FFE5E0] text-[#C2412D]' : status === 'atencao' ? 'bg-[#FEF3C7] text-[#92400E]' : 'bg-[#D1FAE5] text-[#065F46]';
+  }
+
   editPatient(patient: Patient): void {
+    this.formOpen.set(true);
     this.editingPatientId.set(patient.id);
     this.patientModel.set({
       name: patient.name,
@@ -84,6 +107,7 @@ export class PatientManagementComponent {
   }
 
   cancelPatientEdit(): void {
+    this.formOpen.set(false);
     this.editingPatientId.set(null);
     this.patientModel.set(this.emptyPatient());
     this.patientAvatar.set('');
