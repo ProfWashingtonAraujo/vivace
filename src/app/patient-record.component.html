@@ -153,8 +153,8 @@
     @if (activeTab() === 'care') {
       <section class="content-card space-y-5">
         <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div><h2 class="font-bold">Cuidados personalizados</h2><p class="text-xs text-[#52627A]">Defina as orientações exibidas somente para {{ patient.name }}.</p></div>
-          <button type="button" (click)="newInstruction()" class="px-4 py-2.5 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold">+ Nova orientação</button>
+          <div><h2 class="font-bold">Cuidados personalizados</h2><p class="text-sm text-[#52627A]">{{ patient.instructions.length }} {{ patient.instructions.length === 1 ? 'orientação' : 'orientações' }}@if (importantInstructionCount()) { · {{ importantInstructionCount() }} {{ importantInstructionCount() === 1 ? 'importante' : 'importantes' }}}. {{ patient.name }} lê tudo isso na aba Cuidados do portal.</p></div>
+          <button type="button" (click)="newInstruction()" class="px-4 py-2.5 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold shrink-0">Nova orientação</button>
         </div>
 
         @if (instructionMessage()) {<p role="status" class="p-3 bg-[#D1FAE5] rounded-xl text-xs font-bold text-[#0B5CAB]">{{ instructionMessage() }}</p>}
@@ -171,10 +171,19 @@
         }
 
         <div class="grid md:grid-cols-2 gap-3">
-          @for (instruction of patient.instructions; track instruction.id) {
-            <article class="p-4 rounded-2xl border" [class.bg-[#FFF1F2]]="instruction.important" [class.border-[#FECDD3]]="instruction.important" [class.bg-[#F8FAFC]]="!instruction.important" [class.border-[#D9E2EC]]="!instruction.important">
-              <div class="flex items-start justify-between gap-3"><div><span class="text-xs font-bold" [class.text-[#BE123C]]="instruction.important" [class.text-[#0B5CAB]]="!instruction.important">{{ ({curativo:'Curativo',alimentacao:'Alimentação',atividade:'Atividade',higiene:'Higiene',alerta:'Sinal de alerta',medicacao:'Medicação'})[instruction.category] }}</span><h3 class="font-bold mt-1">{{ instruction.title }}</h3></div><div class="flex gap-1"><button type="button" (click)="editInstruction(instruction)" class="px-2.5 py-1.5 bg-white text-[#0B5CAB] rounded-lg text-xs font-bold">Editar</button><button type="button" (click)="deleteInstruction(instruction)" class="px-2.5 py-1.5 bg-white text-[#BE123C] rounded-lg text-xs font-bold">Excluir</button></div></div>
-              <p class="text-xs text-[#52627A] mt-2">{{ instruction.content }}</p>
+          @for (instruction of sortedInstructions(); track instruction.id) {
+            <article class="p-4 sm:p-5 rounded-2xl border border-[#D9E2EC] border-l-4 bg-white" [class.border-l-[#C2412D]]="instruction.important" [class.border-l-[#0B5CAB]]="!instruction.important">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="inline-flex items-center gap-1.5 text-sm font-semibold" [class.text-[#C2412D]]="instruction.important" [class.text-[#0B5CAB]]="!instruction.important"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4"><path [attr.d]="careKinds[instruction.category].icon"/></svg>{{ careKinds[instruction.category].label }}</span>
+                    @if (instruction.important) {<span class="px-2 py-0.5 rounded-md bg-[#FFE5E0] text-[#C2412D] text-xs font-bold">Importante</span>}
+                  </div>
+                  <h3 class="font-bold mt-1.5">{{ instruction.title }}</h3>
+                </div>
+                <div class="flex gap-1 shrink-0"><button type="button" (click)="editInstruction(instruction)" [attr.aria-label]="'Editar ' + instruction.title" class="px-2.5 py-1.5 text-[#0B5CAB] hover:bg-[#E6F0FA] rounded-lg text-sm font-bold">Editar</button><button type="button" (click)="deleteInstruction(instruction)" [attr.aria-label]="'Excluir ' + instruction.title" class="px-2.5 py-1.5 text-[#BE123C] hover:bg-[#FFF1F2] rounded-lg text-sm font-bold">Excluir</button></div>
+              </div>
+              <p class="text-sm leading-relaxed text-[#52627A] mt-2">{{ instruction.content }}</p>
             </article>
           } @empty {
             <div class="md:col-span-2 p-8 border border-dashed border-[#CBD5E0] rounded-2xl text-center"><strong class="block text-sm">Nenhuma orientação cadastrada</strong><p class="mt-1 text-xs text-[#52627A]">Crie orientações específicas para a recuperação deste paciente.</p></div>

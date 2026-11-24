@@ -94,6 +94,20 @@ export class PatientRecordComponent {
     return new Date().toTimeString().slice(0, 5);
   }
 
+  readonly careKinds: Record<PostOpInstruction['category'], { label: string; icon: string }> = {
+    curativo: { label: 'Curativo', icon: 'M4 8h16v8H4zM9 8v8M15 8v8' },
+    alimentacao: { label: 'Alimentação', icon: 'M7 3v8a2 2 0 0 0 4 0V3M9 11v10M17 3c-2 2-3 4-3 7h3v11' },
+    atividade: { label: 'Atividade física', icon: 'M13 4a1.5 1.5 0 1 0 0 .01M8 21l3-6 3 2 2-5-4-3-3 3-3-1' },
+    higiene: { label: 'Higiene', icon: 'M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.500 6-11 6-11z' },
+    alerta: { label: 'Sinal de alerta', icon: 'M12 8v5M12 17h.01M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z' },
+    medicacao: { label: 'Medicação', icon: 'M8 4h8l3 3v13H5V7zM9 12h6M12 9v6' }
+  };
+  /** Important guidance first, keeping the team's own order inside each group. */
+  readonly sortedInstructions = computed(() => {
+    const list = this.patient().instructions;
+    return [...list.filter(item => item.important), ...list.filter(item => !item.important)];
+  });
+  readonly importantInstructionCount = computed(() => this.patient().instructions.filter(item => item.important).length);
   readonly woundPhotos = computed(() => this.patient().woundPhotos.filter(photo => !photo.imageUrl.includes('images.unsplash.com')));
   readonly selectedPhoto = computed(() => {
     const photos = this.woundPhotos();
