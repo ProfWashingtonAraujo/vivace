@@ -344,9 +344,11 @@ describe('I1: o paciente nao escreve alem do que lhe cabe', () => {
   });
 
   it('nao altera os proprios dados cadastrais (identidade, contato, procedimento)', async () => {
+    // allergies e text[]: atribuir um texto simples daria erro de sintaxe de array (22P02),
+    // que nao e um bloqueio de RLS, entao o valor precisa ser um array de verdade.
     for (const change of [
       "email = 'tomada@x.com'", "name = 'Outro Nome'", "cpf = '000.000.000-00'", "phone = '(00) 0'",
-      "procedure = 'outro'", "allergies = 'alergia-alterada-i1'", "hospital = 'outro'", "surgeon_label = 'Dr. Falso'"
+      "procedure = 'outro'", "allergies = ARRAY['alergia-alterada-i1']", "hospital = 'outro'", "surgeon_label = 'Dr. Falso'"
     ]) {
       assert.ok(await blocked(patient('pat-1'), `UPDATE patients SET ${change} WHERE id = 'pat-1'`), `alterou ${change}`);
     }
