@@ -108,7 +108,7 @@ VIVACE_FRONTEND_PORT=4321 VIVACE_API_PORT=4001 npm run dev
 - `VIVACE_API_PORT`: porta da API de persistência (padrão `3001`)
 - `VIVACE_DATA_DIRECTORY`: pasta com o JSON de origem, usada só pelo `npm run db:import` (padrão `.data/`). O servidor não grava mais ali.
 - `DATABASE_URL`: conexão do Postgres usada pela aplicação
-- `MIGRATION_DATABASE_URL`: conexão usada pelas migrações e pelo import, que precisam de privilégio de dono
+- `MIGRATION_DATABASE_URL`: conexão usada pelas migrações, pelo provisionamento e pelo import, que precisam de privilégio de dono. **O servidor da API não a usa**: ele roda só como `vivace_api` (um teste falha se o código de runtime voltar a abrir conexão de dono).
 - `VIVACE_SKIP_FRONTEND=true`: inicia apenas a API
 - `VIVACE_SESSION_TTL_MS`: validade da sessão em milissegundos (padrão `28800000`, 8 horas)
 - `VIVACE_BOOTSTRAP_EMAIL` / `VIVACE_BOOTSTRAP_PASSWORD`: credenciais do administrador inicial. Em desenvolvimento o padrão é `admin@vivace.med.br` / `vivace-demo`. **Hospedado (Render ou `NODE_ENV=production`) a API não sobe** sem uma `VIVACE_BOOTSTRAP_PASSWORD` própria, com pelo menos 10 caracteres e diferente de `vivace-demo`.
@@ -131,7 +131,7 @@ O front é estático e vai para a Vercel. A API (`server.mjs`) é um servidor No
 **2. Render (API).** Web service Node a partir deste repositório:
 
 - Build: `npm ci`
-- Start: `npm run start:hosted` (aplica as migrações, define a senha do papel `vivace_api` e carrega `db/seed/demo-state.json` só se o banco estiver vazio; depois sobe a API)
+- Start: `npm run start:hosted` (aplica as migrações, define a senha do papel `vivace_api` e carrega `db/seed/demo-state.json` só se o banco estiver vazio; depois sobe a API **sem** `MIGRATION_DATABASE_URL` no ambiente, com `env -u`, então a credencial de dono existe só no provisionamento)
 - Variáveis:
   - `MIGRATION_DATABASE_URL`: conexão do dono do banco (por exemplo `neondb_owner`).
   - `DATABASE_URL`: `postgresql://vivace_api:<senha-nova>@<host-direto>/neondb?sslmode=require`. A senha é definida por você aqui; o provisionamento a aplica ao papel.
@@ -176,6 +176,10 @@ Cada rota tem o próprio teto de corpo: login 4 KB, mensagem 16 KB, confirmaçã
 O `PUT /api/state` do administrador não pode deixar o sistema sem administrador: uma lista de `admins` vazia ou ausente responde `400`.
 
 Qualquer erro que escape de uma rota, como uma falha de banco ao consultar a sessão, responde `500` e o processo continua de pé. Ainda não existe cota diária de check-ins ou fotos por paciente, porque a tabela `check_ins` não guarda a hora de criação.
+
+### Administrador inicial
+
+O primeiro administrador é criado por `app_bootstrap_admin` (migração `014`), uma função `SECURITY DEFINER` chamada com o papel `vivace_api`. Ela só cria quando **não existe nenhum administrador**, de forma atômica (duas chamadas simultâneas não criam duas contas) e nunca altera uma conta existente nem a senha dela. O servidor a chama uma vez na subida e memoiza o sucesso; antes ela rodava a cada login, abrindo uma conexão de dono do banco só para perguntar se já havia admin. A conversão de uma senha antiga em texto plano para `scrypt` passa por `app_set_credential`, o mesmo caminho de escrita das senhas do `PUT`.
 
 ### Token, navegador e cabeçalhos de segurança
 

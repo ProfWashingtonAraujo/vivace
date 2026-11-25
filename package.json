@@ -16,7 +16,7 @@
     "test": "node --test --test-concurrency=1 \"test/**/*.test.mjs\"",
     "build:vercel": "node scripts/build-vercel.mjs",
     "db:provision": "node db/provision.mjs",
-    "start:hosted": "node db/provision.mjs && node server.mjs"
+    "start:hosted": "node db/provision.mjs && env -u MIGRATION_DATABASE_URL node server.mjs"
   },
   "dependencies": {
     "@angular/aria": "21.2.14",

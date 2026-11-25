@@ -1,6 +1,6 @@
 import { createHash, randomUUID, scrypt as scryptCallback } from 'node:crypto';
 import { readAggregate, readPatient } from './aggregate.mjs';
-import { asAdmin, createMigrationPool, createPool, withSession } from './session.mjs';
+import { asAdmin, createPool, withSession } from './session.mjs';
 
 const pool = createPool();
 
@@ -78,57 +78,27 @@ export const patientAudience = patientId => asAdmin(pool, async client => {
   return { everyone: rows.length === 0, professionalIds: rows.map(row => row.professional_id) };
 });
 
-// Precisa de contexto admin e doPrivilegio de dono: `admins` tem RLS, e sem um
-// papel valido a consulta volta vazia e o bootstrap recriava a conta a cada login.
-export const hasAnyAccount = async () => {
-  const adminPool = createMigrationPool();
-  try {
-    return await asAdmin(adminPool, async client => {
-      const accounts = await client.query('SELECT count(*)::int AS total FROM admins');
-      return accounts.rows[0].total > 0;
-    });
-  } finally {
-    await adminPool.end();
-  }
-};
-
+// Cria o primeiro administrador quando ainda não existe nenhum. É app_bootstrap_admin
+// (SECURITY DEFINER, migração 014) que decide e grava, de forma atômica, com o papel
+// normal da aplicação: o runtime não precisa de conexão de dono. Devolve true só
+// quando criou; se já havia admin, não toca em nada, nem na senha dele.
 export const bootstrapAdmin = async ({ id, name, email, password }) => {
   const salt = randomUUID().replace(/-/g, '').slice(0, 16);
   const passwordHash = await hashPassword(salt, password);
-  const adminPool = createMigrationPool();
-  try {
-    await asAdmin(adminPool, async client => {
-      await client.query(
-        `INSERT INTO admins (id, name, email, position) VALUES ($1, $2, $3, 0)
-         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, email = EXCLUDED.email`,
-        [id, name, email]
-      );
-      await client.query(
-        `INSERT INTO account_credentials (account_id, role, password_hash) VALUES ($1, 'admin', $2)
-         ON CONFLICT (account_id) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
-        [id, passwordHash]
-      );
-    });
-  } finally {
-    await adminPool.end();
-  }
+  return withSession(pool, { role: '', userId: '' }, async client => {
+    const result = await client.query('SELECT app_bootstrap_admin($1, $2, $3, $4) AS created', [id, name, email, passwordHash]);
+    return result.rows[0].created === true;
+  });
 };
 
-// Senha antiga em texto plano vira hash no primeiro login valido.
+// Senha antiga em texto plano vira hash no primeiro login valido. Passa por
+// app_set_credential, o mesmo caminho de escrita das senhas do PUT.
 export const rehashAccount = async (account, password) => {
   if (isHashed(account.passwordHash)) return false;
   const salt = randomUUID().replace(/-/g, '').slice(0, 16);
   const passwordHash = await hashPassword(salt, password);
-  const adminPool = createMigrationPool();
-  try {
-    await asAdmin(adminPool, client => client.query(
-      `INSERT INTO account_credentials (account_id, role, password_hash) VALUES ($1, $2, $3)
-       ON CONFLICT (account_id) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
-      [account.userId, account.role, passwordHash]
-    ));
-  } finally {
-    await adminPool.end();
-  }
+  await withSession(pool, { role: '', userId: '' }, client =>
+    client.query('SELECT app_set_credential($1, $2, $3)', [account.userId, account.role, passwordHash]));
   return true;
 };
 

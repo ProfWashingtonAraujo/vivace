@@ -910,3 +910,58 @@ describe('I5: o ultimo administrador nao pode ser apagado pelo PUT', () => {
     assert.equal(attempt.status, 400);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Achado I4 da revisao: o runtime da API nao usa a credencial de dono.
+
+describe('I4: a API funciona sem a credencial de dono do banco', () => {
+  it('servidor com MIGRATION_DATABASE_URL inutilizavel ainda autentica e cria sessao', async () => {
+    const at = 'http://127.0.0.1:3293';
+    const pid = await startServer({
+      VIVACE_API_PORT: '3293',
+      MIGRATION_DATABASE_URL: 'postgres://ninguem:x@127.0.0.1:1/x'
+    });
+    try {
+      for (const username of ['admin@vivace.med.br', 'Rafaely Carvalho', 'mariana']) {
+        const result = await call('/api/auth/login', { method: 'POST', at, ip: '10.9.9.1', body: { username, password: 'vivace-demo' } });
+        assert.equal(result.status, 200, `${username}: ${JSON.stringify(result.body)}`);
+      }
+    } finally {
+      stopServer(pid);
+    }
+  });
+
+  it('app_bootstrap_admin, chamado pelo papel da aplicacao, nao altera um admin existente', async () => {
+    const before = (await pool.query("SELECT app_lookup_account('admin@vivace.med.br') AS found")).rows.length;
+    const result = await pool.query("SELECT app_bootstrap_admin('adm-intruso', 'Intruso', 'intruso@x.com', 'scrypt$a$b') AS created");
+    assert.equal(result.rows[0].created, false);
+    const admin = await login('admin@vivace.med.br');
+    assert.equal(admin.role, 'admin');
+    assert.ok(before >= 1);
+  });
+
+  it('com a tabela de admins vazia, o bootstrap cria uma unica conta e a segunda chamada nao cria outra', async () => {
+    const owner = createPool('postgres://vivace:vivace@127.0.0.1:55432/vivace');
+    try {
+      const client = await owner.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("SELECT set_config('app.role', 'admin', true), set_config('app.user_id', 'adm-1', true)");
+        await client.query("DELETE FROM account_credentials WHERE role = 'admin'");
+        await client.query('DELETE FROM admins');
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+      const first = await pool.query("SELECT app_bootstrap_admin('adm-1', 'Administrador', 'admin@vivace.med.br', 'scrypt$salt$hash') AS created");
+      const second = await pool.query("SELECT app_bootstrap_admin('adm-2', 'Outro', 'outro@x.com', 'scrypt$s2$h2') AS created");
+      assert.equal(first.rows[0].created, true);
+      assert.equal(second.rows[0].created, false);
+    } finally {
+      await owner.end();
+      // O restante da suite espera o admin de demonstracao com a senha padrao.
+      const restore = spawnSync(process.execPath, [resolve(root, 'db/import-from-json.mjs'), '--force'], { cwd: root, encoding: 'utf8' });
+      assert.equal(restore.status, 0, `restauracao falhou: ${restore.stderr}`);
+    }
+  });
+});

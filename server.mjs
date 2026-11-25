@@ -199,12 +199,16 @@ const bootstrapAdmin = async () => store.bootstrapAdmin({
   password: bootstrapConfig.password
 });
 
-// A conta de administracao nasce no primeiro acesso, quando o banco esta vazio
-// de contas. A busca por conta seguinte e app_lookup_account, no banco.
+// A conta de administração nasce quando o banco ainda não tem nenhum admin. A
+// criação é feita uma vez por processo: o sucesso fica memoizado, então depois da
+// primeira vez um login não custa nada a mais. Antes isso rodava a cada login e
+// abria uma conexão de dono do banco só para perguntar.
+let adminBootstrapped = false;
 const ensureBootstrapAdmin = async () => {
-  if (await store.hasAnyAccount()) return false;
-  await bootstrapAdmin();
-  return true;
+  if (adminBootstrapped) return false;
+  const created = await bootstrapAdmin();
+  adminBootstrapped = true;
+  return created;
 };
 
 // O SSE não passa pelo RLS, então o filtro por equipe é refeito aqui. O público
@@ -594,6 +598,12 @@ const api = createServer(safeHandler(handleRequest, (error, request, response) =
   }
   json(request, response, failureStatus(error), { error: failureMessage(error, 'Erro interno') });
 }));
+
+// Tenta já na subida, para o primeiro login não pagar o scrypt do hash. Se o banco
+// ainda não responde, o login tenta de novo (adminBootstrapped continua false).
+void ensureBootstrapAdmin()
+  .then(created => { if (created) console.log('Conta de administrador inicial criada'); })
+  .catch(error => console.error('Não foi possível garantir o administrador inicial:', error.message));
 
 process.on('unhandledRejection', reason => console.error('Rejeição não tratada:', reason));
 
