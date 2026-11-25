@@ -1,6 +1,7 @@
 import { createHash, randomUUID, scrypt as scryptCallback } from 'node:crypto';
 import { readAggregate, readPatient } from './aggregate.mjs';
 import { asAdmin, createPool, withSession } from './session.mjs';
+import { exceedsDeletionLimit, idsMarkedRead } from '../lib/state-guards.mjs';
 
 const pool = createPool();
 
@@ -263,6 +264,42 @@ const writeChildren = async (client, table, patientId, items, columns, defaults)
   );
 };
 
+// Coleções que o PUT só acrescenta ou atualiza, nunca apaga: linha do tempo,
+// check-ins e notas clínicas. Elas são criadas por outras rotas (o paciente faz
+// check-in, o servidor registra a linha do tempo) e nenhuma tela apaga um item, então
+// "o que não veio no corpo" quer dizer "o corpo é antigo", não "apague". A posição de
+// um item que já existe não é reescrita; um item novo recebe a posição pelo lado certo
+// da lista: no início (check-ins e notas, mais novo primeiro) ou no fim (linha do tempo).
+const appendOnlyPlacement = {
+  timeline_events: 'last',
+  check_ins: 'first',
+  clinical_notes: 'first'
+};
+
+const writeAppendOnly = async (client, table, patientId, items, columns, defaults) => {
+  const placement = appendOnlyPlacement[table];
+  const position = placement === 'first'
+    ? `(SELECT coalesce(min(position), 1) - 1 FROM ${table} WHERE patient_id = $1)`
+    : `(SELECT coalesce(max(position) + 1, 0) FROM ${table} WHERE patient_id = $1)`;
+  // 'first' percorre do fim para o início, para que o item mais novo do corpo
+  // termine com a menor posição; 'last' mantém a ordem do corpo.
+  const ordered = placement === 'first' ? [...items].reverse() : items;
+  for (const item of ordered) {
+    if (!item || typeof item.id !== 'string') continue;
+    try {
+      await client.query(
+        `INSERT INTO ${table} (patient_id, id, position, ${columns.join(', ')})
+         VALUES ($1, $2, ${position}, ${columns.map((_, offset) => `$${offset + 3}`).join(', ')})
+         ON CONFLICT (patient_id, id) DO UPDATE SET
+           ${columns.map(column => `${column} = EXCLUDED.${column}`).join(', ')}`,
+        [patientId, item.id, ...columns.map(column => columnValue(column, item, defaults))]
+      );
+    } catch (error) {
+      throw Object.assign(error, { message: `${table}/${item.id}: ${error.message}` });
+    }
+  }
+};
+
 const writeMedications = async (client, patientId, medications) => {
   for (const [index, medication] of (medications ?? []).entries()) {
     if (!medication || typeof medication.id !== 'string') continue;
@@ -304,42 +341,32 @@ const writeMedications = async (client, patientId, medications) => {
   );
 };
 
+// Fotos da ferida só crescem pelo PUT: quem as cria é o paciente (POST /api/checkins)
+// e nenhuma tela as apaga. Antes o PUT apagava toda foto que não estivesse no corpo,
+// então uma foto enviada pelo paciente depois da última leitura da equipe sumia no
+// próximo salvamento. A posição de uma foto que já existe também não é reescrita
+// com o índice do corpo, para não empatar com a foto nova que o corpo desconhece.
 const writePhotos = async (client, patientId, photos) => {
-  for (const [index, photo] of (photos ?? []).entries()) {
+  // Do fim para o início, para que a foto mais nova do corpo fique com a menor posição.
+  for (const photo of [...(photos ?? [])].reverse()) {
     if (!photo || typeof photo.id !== 'string') continue;
     const { image, mime, url } = photoImage(photo.imageUrl);
     await client.query(
       `INSERT INTO wound_photos (patient_id, id, position, date, day_label, image, image_mime,
          image_source_url, patient_notes, reviewed_by, reviewed_at, review_status, review_feedback)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       VALUES ($1,$2,(SELECT coalesce(min(position), 1) - 1 FROM wound_photos WHERE patient_id = $1),
+         $3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
        ON CONFLICT (patient_id, id) DO UPDATE SET
-         position = EXCLUDED.position, date = EXCLUDED.date, day_label = EXCLUDED.day_label,
+         date = EXCLUDED.date, day_label = EXCLUDED.day_label,
          image = EXCLUDED.image, image_mime = EXCLUDED.image_mime,
          image_source_url = EXCLUDED.image_source_url, patient_notes = EXCLUDED.patient_notes,
          reviewed_by = EXCLUDED.reviewed_by, reviewed_at = EXCLUDED.reviewed_at,
          review_status = EXCLUDED.review_status, review_feedback = EXCLUDED.review_feedback`,
-      [patientId, photo.id, index, photo.date ?? '', photo.dayLabel ?? '', image, mime, url,
+      [patientId, photo.id, photo.date ?? '', photo.dayLabel ?? '', image, mime, url,
         photo.patientNotes ?? '', photo.reviewedBy ?? '', photo.reviewedAt ?? '',
         photo.reviewStatus ?? 'pendente', photo.reviewFeedback ?? '']
     );
   }
-  const ids = (photos ?? []).map(photo => photo?.id).filter(id => typeof id === 'string');
-  await client.query(
-    `DELETE FROM wound_photos WHERE patient_id = $1 AND NOT (id = ANY($2::text[]))`,
-    [patientId, ids]
-  );
-};
-
-// account_credentials nao tem SELECT para a aplicacao (nem privilegio, nem
-// policy). Isso impede ate um UPDATE ... WHERE, porque citar coluna no WHERE
-// exige SELECT sobre ela. A escrita passa por app_set_credential, que e
-// SECURITY DEFINER, como o login ja usava app_lookup_account.
-const storePassword = async (client, accountId, role, password) => {
-  if (typeof password !== 'string' || !password) return;
-  const passwordHash = isHashed(password)
-    ? password
-    : await hashPassword(randomUUID().replace(/-/g, '').slice(0, 16), password);
-  await client.query('SELECT app_set_credential($1, $2, $3)', [accountId, role, passwordHash]);
 };
 
 const writePatient = async (client, patient, { role, userId }) => {
@@ -422,20 +449,21 @@ const writePatient = async (client, patient, { role, userId }) => {
       await writePhotos(client, patient.id, items);
       continue;
     }
+    if (table in appendOnlyPlacement) {
+      await writeAppendOnly(client, table, patient.id, items, definition.columns, definition.defaults);
+      continue;
+    }
     await writeChildren(client, table, patient.id, items, definition.columns, definition.defaults);
   }
 
-  // Uniao de mensagens, nunca delete.
-  for (const [index, message] of (patient.messages ?? []).entries()) {
-    if (!message || typeof message.id !== 'string') continue;
+  // Mensagens: o PUT só marca como lida uma mensagem que já existe. Remetente, nome e
+  // texto nunca vêm do corpo; mensagens novas nascem em POST /api/messages, onde o
+  // remetente sai da sessão.
+  const readIds = idsMarkedRead(patient.messages);
+  if (readIds.length) {
     await client.query(
-      `INSERT INTO messages (patient_id, id, position, sender, sender_name, timestamp, text, is_read)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (patient_id, id) DO UPDATE SET
-         position = EXCLUDED.position, sender = EXCLUDED.sender, sender_name = EXCLUDED.sender_name,
-         timestamp = EXCLUDED.timestamp, text = EXCLUDED.text, is_read = EXCLUDED.is_read`,
-      [patient.id, message.id, index, message.sender ?? 'equipe', message.senderName ?? '',
-        message.timestamp ?? '', message.text ?? '', message.isRead ?? false]
+      'UPDATE messages SET is_read = true WHERE patient_id = $1 AND id = ANY($2::text[]) AND NOT is_read',
+      [patient.id, readIds]
     );
   }
 };
@@ -490,6 +518,16 @@ export const putState = (session, incoming) => withSession(pool, session, async 
   }
 
   const patients = incoming.patients ?? [];
+
+  // Antes de gravar qualquer coisa: um salvamento que apagaria vários pacientes de uma
+  // vez vem de estado velho ou de lista vazia. O RLS já limita a contagem ao que a
+  // sessão enxerga. Responde 409 e a transação nem começa a escrever.
+  const keepIds = patients.map(patient => patient?.id).filter(id => typeof id === 'string');
+  const doomed = await client.query('SELECT count(*)::int AS total FROM patients WHERE NOT (id = ANY($1::text[]))', [keepIds]);
+  if (exceedsDeletionLimit(doomed.rows[0].total)) {
+    throw Object.assign(new Error('Mass patient deletion refused'), { statusCode: 409 });
+  }
+
   for (const [index, patient] of patients.entries()) {
     if (!patient || typeof patient.id !== 'string') continue;
     await writePatient(client, { ...patient, position: index }, session);

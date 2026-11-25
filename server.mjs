@@ -184,11 +184,12 @@ const bootstrapConfig = resolveBootstrap();
 
 const shortText = (value, fallback) => (typeof value === 'string' && value && value.length <= maxShortField ? value : fallback);
 
-const failureStatus = error => ([400, 403, 404, 413].includes(error.statusCode) ? error.statusCode : 500);
+const failureStatus = error => ([400, 403, 404, 409, 413].includes(error.statusCode) ? error.statusCode : 500);
 const failureMessage = (error, fallback) => ({
   400: 'Requisição inválida',
   403: 'Insufficient permissions',
   404: 'Patient not found',
+  409: 'Alteração recusada: o estado enviado apagaria vários pacientes de uma vez. Recarregue a página.',
   413: 'Corpo da requisição grande demais'
 }[failureStatus(error)] ?? fallback);
 

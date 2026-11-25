@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Cancela a rodada anterior da mesma branch quando chega um push novo.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Testes (Postgres 18)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # Os testes de api e de RLS esperam um Postgres em 127.0.0.1:55432, com o dono
+    # `vivace` e o papel da aplicação `vivace_api`, a mesma configuração do
+    # `npm run db:cluster` local.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: vivace
+          POSTGRES_PASSWORD: vivace
+          POSTGRES_DB: vivace
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U vivace -d vivace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgres://vivace_api:vivace@127.0.0.1:55432/vivace
+      MIGRATION_DATABASE_URL: postgres://vivace:vivace@127.0.0.1:55432/vivace
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Os testes importam um estado com um administrador (o seed do repositório não
+      # traz um, porque em produção ele nasce pelo bootstrap). O arquivo vai para o
+      # diretório temporário do runner, nunca para .data/.
+      - name: Preparar os dados dos testes
+        run: |
+          node scripts/make-test-state.mjs "$RUNNER_TEMP/vivace-state.json"
+          echo "VIVACE_IMPORT_FILE=$RUNNER_TEMP/vivace-state.json" >> "$GITHUB_ENV"
+
+      # Mesmo caminho do Render: cria os papéis, aplica as migrações, define a senha do
+      # vivace_api a partir de DATABASE_URL e carrega os dados de demonstração. Se o
+      # provisionamento quebrar, a CI avisa antes do deploy.
+      - name: Provisionar o banco
+        run: npm run db:provision
+
+      - name: Testes
+        run: npm test
+
+  front:
+    name: Build do front
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Compila em modo de desenvolvimento (erros de tipo e de template).
+      - run: npm run lint
+
+      # Build de produção como na Vercel. Falha se a CSP do vercel.json não liberar a
+      # URL da API, que é o erro que deixaria o site no ar mas sem falar com a API.
+      - name: Build de produção
+        run: npm run build:vercel
+        env:
+          VIVACE_API_URL: https://vivace-api-94bq.onrender.com

@@ -195,6 +195,20 @@ O `PUT /api/state` do administrador não pode deixar o sistema sem administrador
 
 Qualquer erro que escape de uma rota, como uma falha de banco ao consultar a sessão, responde `500` e o processo continua de pé. Ainda não existe cota diária de check-ins ou fotos por paciente, porque a tabela `check_ins` não guarda a hora de criação.
 
+### Salvamento do estado (`PUT /api/state`)
+
+O `PUT` ainda é o caminho que a equipe usa para salvar edições, e ele reescreve o estado a partir do que o cliente tinha na tela. Isso gera dois riscos que estão sendo fechados em fases (plano de escritas granulares). A **fase 0** já vale:
+
+- **Nada que outra pessoa criou some.** Check-ins, fotos da ferida, linha do tempo e notas clínicas só são acrescentados ou atualizados pelo `PUT`, nunca apagados: antes, um check-in ou foto que o paciente enviasse depois da última leitura da equipe era apagado no salvamento seguinte, porque não vinha no corpo. A posição de um item que já existe não é reescrita, e um item novo entra no lado certo da lista (no início para check-ins, fotos e notas; no fim para a linha do tempo).
+- **Mensagens: o `PUT` só marca como lida.** Texto, remetente e nome nunca vêm do corpo, e o `PUT` não cria mensagens; elas nascem em `POST /api/messages`, onde o remetente sai da sessão. Uma mensagem lida também não volta a não lida por um estado velho.
+- **Exclusão em massa recusada.** Um salvamento que apagaria mais de um paciente de uma vez responde `409` e não grava nada. A tela apaga um paciente por vez, então isso só acontece com estado velho ou lista vazia. O front, ao receber `409`, descarta a alteração pendente e recarrega do servidor.
+
+Medicações e instruções continuam sendo apagadas pelo `PUT` (há tela para isso); a troca por endpoints próprios, com controle de versão, é a fase 2. O botão "Restaurar dados de demonstração" foi removido: ele substituía o prontuário de todos os aparelhos conectados pelos dados de exemplo do bundle.
+
+### Integração contínua
+
+`.github/workflows/ci.yml` roda em cada push com um Postgres 18 como serviço: gera um estado de teste com administrador (`scripts/make-test-state.mjs`, que exige um caminho de saída e nunca sobrescreve `.data/`), provisiona o banco pelo mesmo `npm run db:provision` do Render e executa `npm test`, o que inclui os testes de API e de RLS que precisam de banco. Um segundo job compila o front em modo de desenvolvimento e o build de produção da Vercel, que falha se a CSP não liberar a URL da API.
+
 ### Administrador inicial
 
 O primeiro administrador é criado por `app_bootstrap_admin` (migração `014`), uma função `SECURITY DEFINER` chamada com o papel `vivace_api`. Ela só cria quando **não existe nenhum administrador**, de forma atômica (duas chamadas simultâneas não criam duas contas) e nunca altera uma conta existente nem a senha dela. O servidor a chama uma vez na subida e memoiza o sucesso; antes ela rodava a cada login, abrindo uma conexão de dono do banco só para perguntar se já havia admin. A conversão de uma senha antiga em texto plano para `scrypt` passa por `app_set_credential`, o mesmo caminho de escrita das senhas do `PUT`.

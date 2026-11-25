@@ -965,3 +965,132 @@ describe('I4: a API funciona sem a credencial de dono do banco', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fase 0 do plano I2/I3: o PUT nao pode perder o que outras pessoas criaram
+// depois da leitura da equipe, nem aceitar autoria vinda do cliente, nem apagar
+// varios pacientes de uma vez.
+
+const staffState = async token => (await call('/api/state', { token })).body;
+const patientOf = (state, id) => state.patients.find(patient => patient.id === id);
+
+describe('Fase 0: o PUT com estado velho nao perde dados criados por outros', () => {
+  it('check-in, foto e linha do tempo enviados pelo paciente sobrevivem ao salvamento da equipe', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const stale = await staffState(staff); // a equipe le o estado...
+
+    const sent = await call('/api/checkins', {
+      method: 'POST', token: (await login('mariana')).token, body: checkInBody(tinyJpeg) // ...e depois o paciente envia
+    });
+    assert.equal(sent.status, 201, JSON.stringify(sent.body));
+    const checkInId = sent.body.patient.checkIns[0].id;
+    const photoId = sent.body.patient.woundPhotos[0].id;
+
+    const saved = await call('/api/state', { method: 'PUT', token: staff, body: stale }); // a equipe salva o estado velho
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+
+    const after = patientOf(await staffState(staff), 'pat-1');
+    assert.ok(after.checkIns.some(item => item.id === checkInId), 'o check-in do paciente foi apagado');
+    assert.equal(after.checkIns[0].id, checkInId, 'o check-in novo deixou de ser o primeiro');
+    assert.ok(after.woundPhotos.some(item => item.id === photoId), 'a foto do paciente foi apagada');
+    assert.equal(after.woundPhotos[0].id, photoId, 'a foto nova deixou de ser a primeira');
+    assert.ok(after.timeline.some(item => item.id === `tl-${checkInId}`), 'o evento da linha do tempo foi apagado');
+  });
+
+  it('nota clinica criada por outro membro da equipe sobrevive ao salvamento com estado velho', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const stale = await staffState(staff);
+
+    const admin = (await login('admin@vivace.med.br')).token;
+    const adminState = await staffState(admin);
+    patientOf(adminState, 'pat-1').clinicalNotes.unshift({
+      id: 'cn-fase0', author: 'Administracao', date: '25/11/2026 10:00', text: 'nota concorrente'
+    });
+    assert.equal((await call('/api/state', { method: 'PUT', token: admin, body: adminState })).status, 200);
+
+    assert.equal((await call('/api/state', { method: 'PUT', token: staff, body: stale })).status, 200);
+    const notes = patientOf(await staffState(staff), 'pat-1').clinicalNotes;
+    assert.ok(notes.some(note => note.id === 'cn-fase0'), 'a nota concorrente foi apagada');
+    assert.equal(notes[0].id, 'cn-fase0', 'a nota nova deixou de ser a primeira');
+  });
+
+  it('o que a equipe cria pelo PUT continua funcionando (nota nova entra no inicio, check-in antigo fica)', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const state = await staffState(staff);
+    const before = patientOf(state, 'pat-1');
+    const countBefore = before.clinicalNotes.length;
+    before.clinicalNotes.unshift({ id: 'cn-fase0-equipe', author: 'Rafaely Carvalho', date: '25/11/2026 11:00', text: 'nota da equipe' });
+    assert.equal((await call('/api/state', { method: 'PUT', token: staff, body: state })).status, 200);
+    const notes = patientOf(await staffState(staff), 'pat-1').clinicalNotes;
+    assert.equal(notes.length, countBefore + 1);
+    assert.equal(notes[0].id, 'cn-fase0-equipe');
+  });
+});
+
+describe('Fase 0: o PUT nao aceita autoria de mensagem vinda do cliente', () => {
+  it('nao reescreve texto nem remetente, nao cria mensagem e so marca como lida', async () => {
+    const patientToken = (await login('mariana')).token;
+    const posted = await postMessage(patientToken, 'pat-1', 'original-fase0');
+    assert.equal(posted.status, 201);
+    const messageId = posted.body.message.id;
+
+    const staff = (await login('Rafaely Carvalho')).token;
+    const state = await staffState(staff);
+    const patient = patientOf(state, 'pat-1');
+    const target = patient.messages.find(message => message.id === messageId);
+    assert.ok(target, 'mensagem nao apareceu no estado da equipe');
+    Object.assign(target, { text: 'editado', sender: 'equipe', senderName: 'Dra. Falsa', isRead: true });
+    patient.messages.push({ id: 'msg-inventada-fase0', sender: 'equipe', senderName: 'Dra. Falsa', timestamp: '10:00', text: 'nova', isRead: false });
+    assert.equal((await call('/api/state', { method: 'PUT', token: staff, body: state })).status, 200);
+
+    const after = patientOf(await staffState(staff), 'pat-1');
+    const got = after.messages.find(message => message.id === messageId);
+    assert.equal(got.text, 'original-fase0', 'o texto foi reescrito pelo PUT');
+    assert.equal(got.sender, 'paciente', 'o remetente foi forjado pelo PUT');
+    assert.notEqual(got.senderName, 'Dra. Falsa');
+    assert.equal(got.isRead, true, 'marcar como lida deixou de funcionar');
+    assert.ok(!after.messages.some(message => message.id === 'msg-inventada-fase0'), 'o PUT criou uma mensagem');
+  });
+
+  it('um estado velho nao volta uma mensagem lida para nao lida', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const state = await staffState(staff);
+    const patient = patientOf(state, 'pat-1');
+    const read = patient.messages.filter(message => message.isRead);
+    assert.ok(read.length > 0, 'sem mensagem lida para testar');
+    for (const message of read) message.isRead = false;
+    assert.equal((await call('/api/state', { method: 'PUT', token: staff, body: state })).status, 200);
+    const after = patientOf(await staffState(staff), 'pat-1');
+    for (const message of read) {
+      assert.equal(after.messages.find(item => item.id === message.id).isRead, true, `${message.id} voltou a nao lida`);
+    }
+  });
+});
+
+describe('Fase 0: o PUT recusa apagar varios pacientes de uma vez', () => {
+  it('lista de pacientes vazia responde 409 e nao apaga nada', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const state = await staffState(staff);
+    const total = state.patients.length;
+    assert.ok(total >= 2, 'o teste precisa de ao menos 2 pacientes visiveis');
+    const refused = await call('/api/state', { method: 'PUT', token: staff, body: { ...state, patients: [] } });
+    assert.equal(refused.status, 409, JSON.stringify(refused.body));
+    assert.equal((await staffState(staff)).patients.length, total, 'o PUT recusado apagou pacientes');
+  });
+
+  it('estado com so um paciente, apagando os outros, tambem responde 409', async () => {
+    const admin = (await login('admin@vivace.med.br')).token;
+    const state = await staffState(admin);
+    const total = state.patients.length;
+    const refused = await call('/api/state', { method: 'PUT', token: admin, body: { ...state, patients: state.patients.slice(0, 1) } });
+    assert.equal(refused.status, 409);
+    assert.equal((await staffState(admin)).patients.length, total);
+  });
+
+  it('estado completo continua sendo salvo normalmente', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const state = await staffState(staff);
+    assert.equal((await call('/api/state', { method: 'PUT', token: staff, body: state })).status, 200);
+    assert.equal((await staffState(staff)).patients.length, state.patients.length);
+  });
+});

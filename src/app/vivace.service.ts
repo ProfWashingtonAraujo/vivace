@@ -142,16 +142,6 @@ export class VivaceService {
     return this.saveSharedState();
   }
 
-  resetToDefaults(): void {
-    this.patientsState.set(structuredClone(INITIAL_PATIENTS));
-    this.professionalsState.set([structuredClone(CURRENT_PROFESSIONAL)]);
-    this.adminsState.set([structuredClone(CURRENT_ADMIN)]);
-    this.activePatientId.set('pat-1');
-    sessionStorage.removeItem(STORAGE_KEY);
-    sessionStorage.removeItem(PROFESSIONALS_STORAGE_KEY);
-    void this.saveSharedState();
-  }
-
   addProfessional(professional: Omit<ProfessionalUser, 'id'>): Promise<boolean> {
     this.professionalsState.update(professionals => [
       ...professionals,
@@ -598,6 +588,15 @@ export class VivaceService {
           return false;
         }
         if (response.status === 403) return false;
+        // 409: o servidor recusou o salvamento porque o estado local não bate com o dele
+        // (por exemplo, apagaria vários pacientes de uma vez). Repetir o mesmo corpo a
+        // cada 3 segundos nunca resolveria: descarta a alteração pendente e recarrega.
+        if (response.status === 409) {
+          this.hasUnsavedChanges = false;
+          this.storeSyncPending(false);
+          void this.loadSharedState(false);
+          return false;
+        }
         if (!response.ok) return false;
         if (this.stateRevision === revision) {
           this.hasUnsavedChanges = false;
