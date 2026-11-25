@@ -24,7 +24,7 @@ export class AuthComponent {
   readonly loginModel = signal<LoginModel>({
     username: '',
     password: '',
-    rememberMe: true
+    rememberMe: false
   });
   readonly loginForm = form(this.loginModel, path => {
     required(path.username, { message: 'Informe o usuário.' });

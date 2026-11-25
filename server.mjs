@@ -68,11 +68,10 @@ const bearerToken = request => {
   return header.startsWith('Bearer ') ? header.slice(7).trim() : '';
 };
 
-const sessionTokenFromUrl = url => new URL(url, 'http://localhost').searchParams.get('token') ?? '';
-
-// EventSource não manda cabeçalho de autorização, então o token também chega por
-// ?token= na URL. Ler dos dois aqui evita que cada rota repita o par.
-const requestToken = request => bearerToken(request) || sessionTokenFromUrl(request.url);
+// O token só vale no cabeçalho Authorization. Aceitar ?token= na URL o deixava em
+// log de proxy, histórico e Referer; o stream de eventos agora também manda o
+// cabeçalho (o front lê o SSE com fetch, não com EventSource).
+const requestToken = request => bearerToken(request);
 
 // Mesmo resumo que o store grava em sessions, para que o contador de requisições
 // por sessão não vire um segundo lugar onde o token fica em claro. Não é
@@ -137,11 +136,20 @@ const allowedOrigin = request => {
   return origin && originAllowed.has(origin) ? origin : null;
 };
 
+// Respostas da API carregam dados clínicos: nada de cache (compartilhado ou do
+// navegador), nada de o navegador adivinhar o tipo do conteúdo e nada de Referer.
+const securityHeaders = {
+  'Cache-Control': 'no-store',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'no-referrer'
+};
+
 const json = (request, response, status, value, extraHeaders = {}) => {
   const origin = allowedOrigin(request);
   const headers = {
     'Content-Type': 'application/json; charset=utf-8',
     'Vary': 'Origin',
+    ...securityHeaders,
     ...extraHeaders
   };
   if (origin) {
@@ -411,7 +419,8 @@ const handleRequest = async (request, response) => {
     const origin = allowedOrigin(request);
     response.writeHead(200, {
       ...(origin ? { 'Access-Control-Allow-Origin': origin } : {}),
-      'Cache-Control': 'no-cache',
+      ...securityHeaders,
+      'Cache-Control': 'no-store',
       'Connection': 'keep-alive',
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Vary': 'Origin'

@@ -123,3 +123,29 @@ describe('I5: a API hospedada nao sobe com a senha publica do administrador', ()
     assert.match(result.stderr, /VIVACE_BOOTSTRAP_PASSWORD/);
   });
 });
+
+describe('I10: o token nunca vale na URL e as respostas levam cabecalhos de seguranca', () => {
+  it('?token= em rota comum e ignorado: 401 sem nem consultar o banco', async () => {
+    // Com o banco fora, uma rota que consulta a sessao responde 500. 401 prova que
+    // o token da URL nem foi lido.
+    const response = await fetch(`${base}/api/state?token=qualquer`);
+    assert.equal(response.status, 401);
+  });
+
+  it('?token= no stream de eventos tambem e ignorado', async () => {
+    const response = await fetch(`${base}/api/events?token=qualquer`);
+    assert.equal(response.status, 401);
+  });
+
+  it('o token por cabecalho continua sendo lido (chega ao banco, que esta fora)', async () => {
+    const response = await fetch(`${base}/api/state`, { headers: { Authorization: 'Bearer qualquer' } });
+    assert.equal(response.status, 500);
+  });
+
+  it('respostas da API nao podem ser guardadas em cache nem reinterpretadas', async () => {
+    const response = await fetch(`${base}/api/state`);
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert.match(response.headers.get('cache-control') ?? '', /no-store/);
+    assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
+  });
+});

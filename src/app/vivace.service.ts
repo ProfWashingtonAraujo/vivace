@@ -1,11 +1,18 @@
 import { Injectable, computed, effect, signal } from '@angular/core';
 import { CURRENT_ADMIN, CURRENT_PROFESSIONAL, INITIAL_PATIENTS } from '../data/mockData';
+import { createSseParser } from './sse-parser';
 import { AdminUser, AlertSeverity, ChatMessage, DailyCheckIn, MedicationItem, Patient, PostOpInstruction, ProfessionalUser, UserRole, WoundPhoto } from '../types';
 
 const STORAGE_KEY = 'vivace_patients_v2';
 const PROFESSIONALS_STORAGE_KEY = 'vivace_professionals_v1';
 const SESSION_STORAGE_KEY = 'vivace_session_v1';
 const SYNC_PENDING_STORAGE_KEY = 'vivace_sync_pending_v1';
+// Prontuário, cadastros e a marca de "há alteração a enviar" ficam só na aba
+// (sessionStorage): somem quando ela fecha, em vez de ficar para sempre no
+// computador, e logout/401 apagam na hora. Só o token da sessão pode ir para o
+// localStorage, e só se o usuário marcar "Lembrar neste dispositivo".
+const EVENT_RETRY_MIN_MS = 1_000;
+const EVENT_RETRY_MAX_MS = 30_000;
 const SYNC_INTERVAL_MS = 3_000;
 
 declare const VIVACE_API_PORT: string;
@@ -41,6 +48,7 @@ export class VivaceService {
   private stateRevision = 0;
   private hasUnsavedChanges = this.loadSyncPending();
   private token = this.storedSession?.token ?? '';
+  private eventsAbort: AbortController | null = null;
 
   readonly patients = this.patientsState.asReadonly();
   readonly professionals = this.professionalsState.asReadonly();
@@ -55,10 +63,14 @@ export class VivaceService {
   );
 
   constructor() {
+    this.purgeLegacyClinicalCache();
     this.patientsState.update(patients => this.assignPrimaryProfessional(patients, this.professionalUser()));
     effect(() => {
+      const patients = this.patients();
+      // Deslogado não há o que guardar: o estado é o de demonstração do bundle.
+      if (!this.isLoggedIn()) return;
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.patients()));
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(patients));
       } catch {
         // The demo remains usable when browser storage is unavailable.
       }
@@ -67,8 +79,10 @@ export class VivaceService {
     if (this.token) this.listenForMessages();
     window.setInterval(() => void this.loadSharedState(false), SYNC_INTERVAL_MS);
     effect(() => {
+      const professionals = this.professionals();
+      if (!this.isLoggedIn()) return;
       try {
-        localStorage.setItem(PROFESSIONALS_STORAGE_KEY, JSON.stringify(this.professionals()));
+        sessionStorage.setItem(PROFESSIONALS_STORAGE_KEY, JSON.stringify(professionals));
       } catch {
         // The demo remains usable when browser storage is unavailable.
       }
@@ -103,8 +117,10 @@ export class VivaceService {
   async logout(): Promise<void> {
     const token = this.token;
     this.token = '';
+    this.stopListening();
     this.isLoggedIn.set(false);
     this.sessionName.set('');
+    this.clearClinicalData();
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
       sessionStorage.removeItem(SESSION_STORAGE_KEY);
@@ -115,7 +131,7 @@ export class VivaceService {
     try {
       await fetch(this.apiUrl('/api/auth/logout'), {
         method: 'POST',
-        headers: this.authHeaders()
+        headers: { Authorization: `Bearer ${token}` }
       });
     } catch {
       // The session is already discarded locally.
@@ -131,8 +147,8 @@ export class VivaceService {
     this.professionalsState.set([structuredClone(CURRENT_PROFESSIONAL)]);
     this.adminsState.set([structuredClone(CURRENT_ADMIN)]);
     this.activePatientId.set('pat-1');
-    localStorage.removeItem(STORAGE_KEY);
-    localStorage.removeItem(PROFESSIONALS_STORAGE_KEY);
+    sessionStorage.removeItem(STORAGE_KEY);
+    sessionStorage.removeItem(PROFESSIONALS_STORAGE_KEY);
     void this.saveSharedState();
   }
 
@@ -289,6 +305,7 @@ export class VivaceService {
   }
 
   private mergePatient(patient: Patient): void {
+    if (!this.token) return;
     this.patientsState.update(patients => patients.map(item => item.id === patient.id ? patient : item));
   }
 
@@ -522,8 +539,13 @@ export class VivaceService {
       await this.saveSharedState();
       return;
     }
+    const requestToken = this.token;
     try {
       const response = await this.authFetch(this.apiUrl());
+      // Resposta de uma sessão que já não é a atual (logout, ou novo login logo
+      // depois): não devolve o prontuário para a tela de login e, sobretudo, um
+      // 401 atrasado da sessão antiga não pode deslogar a nova.
+      if (this.token !== requestToken) return;
       if (response.status === 401) {
         await this.handleUnauthorized();
         return;
@@ -534,6 +556,7 @@ export class VivaceService {
       }
       if (!response.ok) return;
       const state = await response.json() as { patients?: Patient[]; professionals?: ProfessionalUser[]; admins?: AdminUser[] };
+      if (this.token !== requestToken) return;
       const professional = state.professionals?.[0] ?? this.professionalUser();
       const patients = state.patients
         ? this.assignPrimaryProfessional(state.patients.map(patient => this.normalizePatient(patient)), professional)
@@ -611,19 +634,70 @@ export class VivaceService {
     return fetch(url, { ...init, headers });
   }
 
+  // O stream é lido com fetch para mandar o token em Authorization. O EventSource
+  // não manda cabeçalho, e a alternativa era o token na URL (log de proxy,
+  // histórico, Referer). Em troca, a reconexão é nossa, com espera crescente.
   private listenForMessages(): void {
-    const separator = this.apiUrl('/api/events').includes('?') ? '&' : '?';
-    const events = new EventSource(`${this.apiUrl('/api/events')}${separator}token=${encodeURIComponent(this.token)}`);
-    events.onmessage = event => {
+    this.stopListening();
+    const controller = new AbortController();
+    this.eventsAbort = controller;
+    void this.runEventStream(this.token, controller.signal);
+  }
+
+  private stopListening(): void {
+    this.eventsAbort?.abort();
+    this.eventsAbort = null;
+  }
+
+  private async runEventStream(token: string, signal: AbortSignal): Promise<void> {
+    let delay = EVENT_RETRY_MIN_MS;
+    while (!signal.aborted && this.token === token) {
       try {
-        const payload = JSON.parse(event.data) as { type?: string; patientId?: string; message?: ChatMessage };
-        if (payload.type === 'message.created' && payload.patientId && payload.message) {
-          this.mergeChatMessage(payload.patientId, payload.message);
+        const response = await fetch(this.apiUrl('/api/events'), {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' },
+          cache: 'no-store',
+          signal
+        });
+        // Sessão inválida: não adianta reconectar. A sincronização periódica do
+        // estado recebe o 401 e faz o logout.
+        if (response.status === 401) return;
+        if (response.ok && response.body) {
+          delay = EVENT_RETRY_MIN_MS;
+          const parser = createSseParser(data => this.handleEventData(data));
+          const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            parser.push(value);
+          }
         }
       } catch {
-        // Invalid events are ignored; polling remains available as a fallback.
+        if (signal.aborted) return;
       }
-    };
+      await this.pause(delay, signal);
+      delay = Math.min(delay * 2, EVENT_RETRY_MAX_MS);
+    }
+  }
+
+  private pause(milliseconds: number, signal: AbortSignal): Promise<void> {
+    return new Promise(resolve => {
+      const timer = window.setTimeout(resolve, milliseconds);
+      signal.addEventListener('abort', () => {
+        window.clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    });
+  }
+
+  private handleEventData(data: string): void {
+    try {
+      const payload = JSON.parse(data) as { type?: string; patientId?: string; message?: ChatMessage };
+      if (payload.type === 'message.created' && payload.patientId && payload.message) {
+        this.mergeChatMessage(payload.patientId, payload.message);
+      }
+    } catch {
+      // Invalid events are ignored; polling remains available as a fallback.
+    }
   }
 
   private mergeChatMessage(patientId: string, message: ChatMessage): void {
@@ -637,9 +711,41 @@ export class VivaceService {
     }));
   }
 
+  // Logout e 401: o prontuário sai da memória e do navegador. Sem isso, o próximo
+  // usuário do mesmo computador herdava o cache, e a marca "há alteração a
+  // enviar" podia mandar o estado de outra pessoa na sessão seguinte.
+  private clearClinicalData(): void {
+    this.stateRevision++;
+    this.hasUnsavedChanges = false;
+    this.patientsState.set(structuredClone(INITIAL_PATIENTS).map(patient => this.normalizePatient(patient)));
+    this.professionalsState.set([structuredClone(CURRENT_PROFESSIONAL)]);
+    this.adminsState.set([structuredClone(CURRENT_ADMIN)]);
+    this.activePatientId.set('pat-1');
+    try {
+      for (const key of [STORAGE_KEY, PROFESSIONALS_STORAGE_KEY, SYNC_PENDING_STORAGE_KEY]) {
+        sessionStorage.removeItem(key);
+        localStorage.removeItem(key);
+      }
+    } catch {
+      // Nothing to clear when browser storage is unavailable.
+    }
+  }
+
+  // Versões anteriores guardavam o prontuário no localStorage, que sobrevive ao
+  // fechamento do navegador. Quem já tem essas chaves as perde na primeira carga.
+  private purgeLegacyClinicalCache(): void {
+    try {
+      for (const key of [STORAGE_KEY, PROFESSIONALS_STORAGE_KEY, SYNC_PENDING_STORAGE_KEY]) {
+        localStorage.removeItem(key);
+      }
+    } catch {
+      // Nothing to purge when browser storage is unavailable.
+    }
+  }
+
   private loadPatients(): Patient[] {
     try {
-      const value = localStorage.getItem(STORAGE_KEY);
+      const value = sessionStorage.getItem(STORAGE_KEY);
       if (value) return (JSON.parse(value) as Patient[]).map(patient => this.normalizePatient(patient));
     } catch {
       // Fall back to bundled demonstration data.
@@ -649,7 +755,7 @@ export class VivaceService {
 
   private loadProfessionals(): ProfessionalUser[] {
     try {
-      const value = localStorage.getItem(PROFESSIONALS_STORAGE_KEY);
+      const value = sessionStorage.getItem(PROFESSIONALS_STORAGE_KEY);
       if (value) return JSON.parse(value) as ProfessionalUser[];
     } catch {
       // Fall back to bundled demonstration data.
@@ -674,7 +780,7 @@ export class VivaceService {
 
   private loadSyncPending(): boolean {
     try {
-      return localStorage.getItem(SYNC_PENDING_STORAGE_KEY) === 'true';
+      return sessionStorage.getItem(SYNC_PENDING_STORAGE_KEY) === 'true';
     } catch {
       return false;
     }
@@ -682,8 +788,8 @@ export class VivaceService {
 
   private storeSyncPending(pending: boolean): void {
     try {
-      if (pending) localStorage.setItem(SYNC_PENDING_STORAGE_KEY, 'true');
-      else localStorage.removeItem(SYNC_PENDING_STORAGE_KEY);
+      if (pending) sessionStorage.setItem(SYNC_PENDING_STORAGE_KEY, 'true');
+      else sessionStorage.removeItem(SYNC_PENDING_STORAGE_KEY);
     } catch {
       // In-memory retries still protect the current session when storage is unavailable.
     }

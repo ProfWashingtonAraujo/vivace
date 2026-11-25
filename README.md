@@ -177,6 +177,14 @@ O `PUT /api/state` do administrador não pode deixar o sistema sem administrador
 
 Qualquer erro que escape de uma rota, como uma falha de banco ao consultar a sessão, responde `500` e o processo continua de pé. Ainda não existe cota diária de check-ins ou fotos por paciente, porque a tabela `check_ins` não guarda a hora de criação.
 
+### Token, navegador e cabeçalhos de segurança
+
+O token de sessão só vale no cabeçalho `Authorization: Bearer`. `?token=` na URL foi removido de todas as rotas, inclusive `/api/events`: na URL ele ia parar em log de proxy, histórico e `Referer`. Como o `EventSource` não manda cabeçalho, o front lê o stream de eventos com `fetch` (`src/app/sse-parser.ts` interpreta o formato) e reconecta sozinho com espera crescente, de 1 a 30 segundos. Um front antigo, ainda aberto com `EventSource`, recebe `401` no stream e cai na sincronização periódica até ser recarregado.
+
+No navegador, "Lembrar neste dispositivo" vem desmarcado, e só o token vai para o `localStorage`, e apenas quando a pessoa marca essa opção. O prontuário, os cadastros e a marca de alteração pendente ficam em `sessionStorage`: somem quando a aba fecha, e o logout (ou um `401`) apaga tudo na hora, fecha o stream, devolve o estado ao de demonstração do bundle e avisa o servidor com o token para a sessão ser apagada lá também. O cache antigo do `localStorage` é removido na primeira carga. Uma resposta que chega de uma sessão que já não é a atual é ignorada.
+
+Toda resposta da API leva `Cache-Control: no-store`, `X-Content-Type-Options: nosniff` e `Referrer-Policy: no-referrer`. O front na Vercel recebe, pelo `vercel.json`, uma `Content-Security-Policy` (sem script inline nem `eval`, `frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options`, `Referrer-Policy` e `Permissions-Policy`. A CSP lista a API em `connect-src`, e **a URL da API em `vercel.json` precisa acompanhar `VIVACE_API_URL`**: o `npm run build:vercel` falha com uma mensagem clara quando elas divergem, em vez de publicar um site que o navegador impede de falar com a API. As imagens externas liberadas são as de `images.unsplash.com` e `ui-avatars.com`.
+
 ### Limite de tentativas de login
 
 O `POST /api/auth/login` conta as falhas por endereço IP e por conta, separadamente. Ao passar de `VIVACE_LOGIN_MAX_ATTEMPTS` (padrão: 5), a resposta vira `429` com o cabeçalho `Retry-After` e a tentativa seguinte só é aceita depois de `VIVACE_LOGIN_LOCKOUT_MS` (padrão: 15 minutos). As falhas somam dentro de uma janela de `VIVACE_LOGIN_WINDOW_MS` (padrão: 15 minutos) e um login bem-sucedido zera os contadores.
