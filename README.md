@@ -155,7 +155,7 @@ Toda rota exige um token de sessão (`Authorization: Bearer <token>`), emitido p
 | `GET /api/state` | todos os pacientes | apenas o próprio registro, sem notas clínicas |
 | `PUT /api/state` | permitido | `403` |
 | `POST /api/messages` | envia como `equipe` | envia como `paciente`, apenas para si mesmo |
-| `GET /api/events` | eventos de todos | apenas os próprios eventos |
+| `GET /api/events` | eventos dos pacientes da equipe e dos sem equipe (mesma regra do RLS) | apenas os próprios eventos |
 
 O remetente da mensagem é definido pelo servidor conforme o papel do token, então um paciente não consegue se passar pela equipe. O CORS só responde à própria origem do frontend.
 
@@ -175,7 +175,9 @@ O `POST /api/auth/login` conta as falhas por endereço IP e por conta, separadam
 
 Limitar pela conta impede que a força bruta distribuída por vários endereços passe, mas também permite que alguém tranque o acesso de um usuário legítimo com `VIVACE_LOGIN_MAX_ATTEMPTS` tentativas.
 
-As duas dimensões são independentes, e a diferença é deliberada: trocar de endereço não escapa de um bloqueio por conta, mas um endereço novo começa com a contagem zerada. A chave é `ip:<endereço>` e `conta:<identificador normalizado>`, na tabela `login_attempts`.
+As duas dimensões são independentes, e a diferença é deliberada: trocar de endereço não escapa de um bloqueio por conta, mas um endereço novo começa com a contagem zerada. A chave é `ip:<endereço>` e `conta:<papel>:<id>`, na tabela `login_attempts`. A chave de conta usa a conta **resolvida**, e não o texto digitado: o login casa o paciente por prefixo de e-mail, então `mari`, `maria` e `mariana.souza@email.com` são a mesma conta e dividem as mesmas tentativas. Um identificador que não existe cai na chave `conta:?:<texto>`. O casamento por prefixo trata `%` e `_` como texto literal e só vale quando o prefixo é único (migração `013`).
+
+**Endereço do cliente.** Atrás de um proxy, o `X-Forwarded-For` só é confiável no fim da lista, onde o proxy acrescenta o endereço de quem falou com ele; o começo é escrito pelo cliente. Por isso `VIVACE_TRUST_PROXY_HOPS` diz quantos proxies de confiança existem na frente da API, e o endereço é lido contando essa quantidade da direita. Com `0` (padrão) o cabeçalho é ignorado e vale o endereço do socket. **Na hospedagem (Render) é preciso definir esse valor**, senão todos os usuários aparecem com o mesmo IP do proxy e dividem a mesma cota e o mesmo bloqueio. Identificador acima de 200 caracteres e senha acima de 1024 são recusados com `400`.
 
 Os contadores vivem no Postgres, na tabela `login_attempts`, e não na memória do processo. A consequência prática é que **o bloqueio sobrevive a um reinício da API e vale igual entre réplicas**: com um `Map` em memória, reiniciar o servidor liberava todo mundo, e duas réplicas dividiam a mesma contagem pela metade, de modo que cinco tentativas em cada uma entravam como uma. A contagem é gravada por `app_record_login_failure`, um único `INSERT ... ON CONFLICT` que atualiza as três colunas de uma vez, então requisições simultâneas para a mesma chave se serializam no índice e nenhuma falha se perde.
 

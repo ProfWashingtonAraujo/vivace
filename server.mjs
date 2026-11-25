@@ -5,6 +5,9 @@ import { dirname, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as store from './db/store.mjs';
+import { clientAddress as resolveClientAddress } from './lib/client-ip.mjs';
+import { loginKeys as buildLoginKeys } from './lib/login-keys.mjs';
+import { shouldDeliver } from './lib/event-audience.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
@@ -13,6 +16,11 @@ const sessionTtlMs = Number(process.env.VIVACE_SESSION_TTL_MS ?? 8 * 60 * 60 * 1
 const loginMaxAttempts = Math.max(1, Number(process.env.VIVACE_LOGIN_MAX_ATTEMPTS ?? 5));
 const loginWindowMs = Math.max(1, Number(process.env.VIVACE_LOGIN_WINDOW_MS ?? 15 * 60 * 1000));
 const loginLockoutMs = Math.max(1, Number(process.env.VIVACE_LOGIN_LOCKOUT_MS ?? 15 * 60 * 1000));
+// Quantos proxies de confiança ficam na frente da API (no Render, um). Com 0 o
+// X-Forwarded-For é ignorado, que é o certo quando a API recebe conexões direto.
+const trustProxyHops = Math.max(0, Number(process.env.VIVACE_TRUST_PROXY_HOPS ?? 0));
+const maxIdentifierLength = 200;
+const maxPasswordLength = 1_024;
 const extraOrigins = (process.env.VIVACE_ALLOWED_ORIGINS ?? '')
   .split(',')
   .map(origin => origin.trim())
@@ -68,17 +76,10 @@ const requestToken = request => bearerToken(request) || sessionTokenFromUrl(requ
 // caracteres porque só precisa ser único entre sessões, não ser um resumo fiel.
 const tokenFingerprint = token => createHash('sha256').update(token).digest('hex').slice(0, 32);
 
-const clientAddress = request => {
-  const forwarded = request.headers['x-forwarded-for'];
-  const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  if (value) return String(value).split(',')[0].trim();
-  return request.socket.remoteAddress ?? 'desconhecido';
-};
-
-const loginKeys = (request, identifier) => [
-  `ip:${clientAddress(request)}`,
-  `conta:${normalize(identifier)}`
-];
+const clientAddress = request => resolveClientAddress({
+  forwardedFor: request.headers['x-forwarded-for'],
+  remoteAddress: request.socket.remoteAddress
+}, trustProxyHops);
 
 const humanizeWait = milliseconds => {
   const seconds = Math.max(1, Math.ceil(milliseconds / 1000));
@@ -183,12 +184,31 @@ const ensureBootstrapAdmin = async () => {
   return true;
 };
 
-const publish = event => {
-  const payload = `data: ${JSON.stringify(event)}\n\n`;
-  for (const [client, clientSession] of eventClients) {
-    if (clientSession.role === 'patient' && event.patientId !== clientSession.userId) continue;
-    client.write(payload);
+// O SSE não passa pelo RLS, então o filtro por equipe é refeito aqui. O público
+// do paciente é consultado uma vez por evento, e só se houver profissional
+// conectado. Se a consulta falhar, shouldDeliver decide sem público: só o dono do
+// registro e o admin recebem.
+const publish = async event => {
+  const payload = `data: ${JSON.stringify(event)}
+
+`;
+  let audience = null;
+  const needsAudience = event.patientId
+    && [...eventClients.values()].some(session => session.role === 'professional');
+  if (needsAudience) {
+    try {
+      audience = await store.patientAudience(event.patientId);
+    } catch (error) {
+      console.error('Falha ao consultar a equipe do paciente para o evento:', error);
+    }
   }
+  for (const [client, clientSession] of eventClients) {
+    if (shouldDeliver(clientSession, event, audience)) client.write(payload);
+  }
+};
+
+const publishSafely = event => {
+  void publish(event).catch(error => console.error('Falha ao publicar evento:', error));
 };
 
 // ------------------------------------------------- limite de requisicoes
@@ -304,7 +324,18 @@ const api = createServer(async (request, response) => {
         json(request, response, 400, { error: 'Informe usuário e senha' });
         return;
       }
-      const keys = loginKeys(request, identifier);
+      if (identifier.length > maxIdentifierLength || password.length > maxPasswordLength) {
+        json(request, response, 400, { error: 'Usuário ou senha inválidos' });
+        return;
+      }
+      if (await ensureBootstrapAdmin()) {
+        console.log('Conta de administrador inicial criada');
+      }
+      // A conta é resolvida ANTES do bloqueio: a chave de conta usa quem ela é, e
+      // não o texto digitado, para que variações do identificador (prefixo de
+      // e-mail) não ganhem tentativas novas. Resolver não gasta scrypt.
+      const account = await store.findAccount(identifier);
+      const keys = buildLoginKeys({ ip: clientAddress(request), account, identifier: normalize(identifier) });
       const lockedFor = await store.loginLockoutRemaining(keys);
       if (lockedFor > 0) {
         // O mesmo scrypt que o caminho 401 gasta. Sem esta linha, o 429 saía em
@@ -313,16 +344,12 @@ const api = createServer(async (request, response) => {
         // impedir.
         await burnScrypt(password);
         const retryAfter = Math.ceil(lockedFor / 1000);
-        console.log(`Login bloqueado por ${lockedFor}ms para ${identifier} (${clientAddress(request)})`);
+        console.log(`Login bloqueado por ${lockedFor}ms (${clientAddress(request)})`);
         json(request, response, 429, {
           error: `Muitas tentativas de login. Tente novamente em ${humanizeWait(lockedFor)}.`
         }, { 'Retry-After': String(retryAfter) });
         return;
       }
-      if (await ensureBootstrapAdmin()) {
-        console.log('Conta de administrador inicial criada');
-      }
-      const account = await store.findAccount(identifier);
       if (!account) {
         await burnScrypt(password);
         await store.recordLoginFailure(keys, lockoutPolicy);
@@ -406,7 +433,7 @@ const api = createServer(async (request, response) => {
         clientMessageId: input.clientMessageId
       });
       json(request, response, 201, { message });
-      publish({ type: 'message.created', patientId: input.patientId, message });
+      publishSafely({ type: 'message.created', patientId: input.patientId, message });
     } catch (error) {
       console.error('Message API error:', error);
       json(request, response, error.statusCode ?? 500, { error: error.statusCode === 404 ? 'Patient not found' : 'Could not persist message' });
@@ -444,7 +471,7 @@ const api = createServer(async (request, response) => {
         : undefined;
       const savedPatient = await store.insertCheckIn(session, { patientId, checkIn, photo });
       json(request, response, 201, { patient: savedPatient });
-      publish({ type: 'checkin.created', patientId, checkIn });
+      publishSafely({ type: 'checkin.created', patientId, checkIn });
     } catch (error) {
       console.error('Check-in API error:', error);
       json(request, response, error.statusCode ?? 500, { error: error.statusCode === 404 ? 'Patient not found' : 'Could not save check-in' });
@@ -468,7 +495,7 @@ const api = createServer(async (request, response) => {
         time: input.time
       });
       json(request, response, 200, { patient: savedPatient });
-      publish({ type: 'medication.updated', patientId });
+      publishSafely({ type: 'medication.updated', patientId });
     } catch (error) {
       console.error('Medication API error:', error);
       json(request, response, error.statusCode ?? 500, { error: error.statusCode === 404 ? 'Patient not found' : 'Could not save confirmation' });

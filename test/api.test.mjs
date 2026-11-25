@@ -60,6 +60,9 @@ const startServer = async (env = {}) => {
       MIGRATION_DATABASE_URL: 'postgres://vivace:vivace@127.0.0.1:55432/vivace',
       VIVACE_SKIP_FRONTEND: 'true',
       VIVACE_API_PORT: '3194',
+      // Os testes simulam IPs pelo X-Forwarded-For, o que so vale com um proxy
+      // confiavel na frente, como no Render. Sem isso o cabecalho e ignorado.
+      VIVACE_TRUST_PROXY_HOPS: '1',
       ...env
     }
   });
@@ -682,5 +685,159 @@ describe('origem e limite de requisicoes', () => {
     } finally {
       stopServer(comIp);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Achados C1 e C2 da revisao: o stream de eventos nao pode contornar a equipe
+// do paciente, e o limite de tentativas nao pode ser contornado.
+
+const openStream = async token => {
+  const controller = new AbortController();
+  const response = await fetch(`${base}/api/events`, {
+    headers: { ...json, Authorization: `Bearer ${token}` },
+    signal: controller.signal
+  });
+  assert.equal(response.status, 200);
+  const events = [];
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  void (async () => {
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        for (const block of decoder.decode(value, { stream: true }).split('\n\n')) {
+          if (block.startsWith('data: ')) events.push(JSON.parse(block.slice(6)));
+        }
+      }
+    } catch {
+      // abortado pelo teste
+    }
+  })();
+  return { events, close: () => controller.abort() };
+};
+
+const waitFor = async (predicate, timeoutMs = 4000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  return false;
+};
+
+const postMessage = (token, patientId, text) =>
+  call('/api/messages', { method: 'POST', token, body: { patientId, text, clientMessageId: `sse-${text}` } });
+
+describe('C1: o stream de eventos respeita a equipe do paciente', () => {
+  const streams = [];
+  const open = async token => {
+    const stream = await openStream(token);
+    streams.push(stream);
+    return stream;
+  };
+  after(() => streams.forEach(stream => stream.close()));
+
+  before(async () => {
+    // Helena (prof-9) nao esta na equipe de ninguem, entao so deve ver o paciente
+    // sem cirurgiao (pat-2). Cria se ainda nao existir.
+    const admin = (await login('admin@vivace.med.br')).token;
+    const full = (await call('/api/state', { token: admin })).body;
+    if (!full.professionals.some(professional => professional.id === 'prof-9')) {
+      const professionals = [
+        ...full.professionals,
+        { id: 'prof-9', name: 'Helena Duarte', role: 'Cirurgia Plastica', crmCoren: 'CRM-SP 222.111', avatar: '', email: 'helena@vivace.med.br', specialty: 'Cirurgia Plastica', password: 'vivace-demo' }
+      ];
+      const created = await call('/api/state', { method: 'PUT', token: admin, body: { ...full, professionals } });
+      assert.equal(created.status, 200);
+    }
+  });
+
+  it('profissional fora da equipe nao recebe a mensagem do paciente; o da equipe e o admin recebem', async () => {
+    const teamMember = await open((await login('Rafaely Carvalho')).token);
+    const outsider = await open((await login('Helena Duarte')).token);
+    const admin = await open((await login('admin@vivace.med.br')).token);
+
+    const sent = await postMessage((await login('mariana')).token, 'pat-1', 'ola equipe (c1)');
+    assert.equal(sent.status, 201);
+
+    assert.ok(await waitFor(() => teamMember.events.some(event => event.type === 'message.created')), 'a equipe nao recebeu');
+    assert.ok(await waitFor(() => admin.events.some(event => event.type === 'message.created')), 'o admin nao recebeu');
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+    assert.deepEqual(outsider.events.filter(event => event.patientId === 'pat-1'), [], 'profissional fora da equipe recebeu evento de pat-1');
+  });
+
+  it('paciente sem equipe continua visivel a qualquer profissional', async () => {
+    const outsider = await open((await login('Helena Duarte')).token);
+    const sent = await postMessage((await login('carlos')).token, 'pat-2', 'sem equipe (c1)');
+    assert.equal(sent.status, 201);
+    assert.ok(await waitFor(() => outsider.events.some(event => event.patientId === 'pat-2')), 'pat-2 nao tem equipe e devia chegar');
+  });
+
+  it('o evento de check-in tambem nao vaza para fora da equipe', async () => {
+    const outsider = await open((await login('Helena Duarte')).token);
+    const teamMember = await open((await login('Rafaely Carvalho')).token);
+    const checkIn = await call('/api/checkins', {
+      method: 'POST',
+      token: (await login('mariana')).token,
+      body: { id: 'chk-c1-sse', checkIn: { painLevel: 3, temperature: 36.6, mobilityScore: 'repouso_absoluto', symptoms: [], notes: 'segredo clinico', mood: 'bem' } }
+    });
+    assert.equal(checkIn.status, 201);
+    assert.ok(await waitFor(() => teamMember.events.some(event => event.type === 'checkin.created')));
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+    assert.deepEqual(outsider.events.filter(event => event.type === 'checkin.created'), []);
+  });
+});
+
+describe('C2: o limite de tentativas de login nao se contorna', () => {
+  const clearAttempts = () => pool.query('DELETE FROM login_attempts');
+  before(clearAttempts);
+  after(clearAttempts);
+
+  it('curinga no identificador nao resolve conta, mesmo com a senha certa', async () => {
+    for (const username of ['%%%', 'mar_', '%', '_%_']) {
+      const result = await call('/api/auth/login', { method: 'POST', body: { username, password: 'vivace-demo' }, ip: '10.9.5.1' });
+      assert.equal(result.status, 401, `"${username}" nao devia autenticar`);
+    }
+  });
+
+  it('variacoes do mesmo identificador compartilham o bloqueio da conta', async () => {
+    // Todas resolvem para pat-1. Cada tentativa vem de um IP novo, para que so a
+    // chave de conta possa segurar.
+    const variants = ['mariana', 'mariana.souza@email.com', 'mariana.souza', 'mariana.s', 'mariana.so'];
+    for (const [index, username] of variants.entries()) {
+      const result = await call('/api/auth/login', { method: 'POST', body: { username, password: 'errada' }, ip: `10.9.6.${index + 1}` });
+      assert.equal(result.status, 401, `tentativa ${index + 1} deveria ser 401`);
+    }
+    const locked = await call('/api/auth/login', { method: 'POST', body: { username: 'mariana.sou', password: 'vivace-demo' }, ip: '10.9.6.99' });
+    assert.equal(locked.status, 429, 'uma variacao nova do identificador ganhou tentativas novas');
+  });
+
+  it('sem proxy confiavel, girar o X-Forwarded-For nao zera o limite por IP', async () => {
+    await clearAttempts();
+    const at = 'http://127.0.0.1:3198';
+    const pid = await startServer({ VIVACE_API_PORT: '3198', VIVACE_TRUST_PROXY_HOPS: '0' });
+    try {
+      const statuses = [];
+      for (let attempt = 0; attempt < 7; attempt += 1) {
+        // Identificador diferente e IP forjado diferente a cada tentativa: so o
+        // endereco real do socket pode acumular a contagem.
+        const result = await call('/api/auth/login', {
+          method: 'POST', at, ip: `203.0.113.${attempt + 1}`, body: { username: `fantasma-c2-${attempt}`, password: 'errada' }
+        });
+        statuses.push(result.status);
+      }
+      assert.deepEqual(statuses, [401, 401, 401, 401, 401, 429, 429], `o X-Forwarded-For forjado escapou do limite: ${statuses.join(',')}`);
+    } finally {
+      stopServer(pid);
+    }
+  });
+
+  it('identificador e senha gigantes sao recusados antes de qualquer trabalho', async () => {
+    const huge = await call('/api/auth/login', { method: 'POST', ip: '10.9.7.1', body: { username: 'a'.repeat(500), password: 'x' } });
+    assert.equal(huge.status, 400);
+    const longPassword = await call('/api/auth/login', { method: 'POST', ip: '10.9.7.2', body: { username: 'mariana', password: 'x'.repeat(5_000) } });
+    assert.equal(longPassword.status, 400);
   });
 });

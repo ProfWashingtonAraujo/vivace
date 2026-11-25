@@ -69,6 +69,15 @@ export const findAccount = async identifier => {
   });
 };
 
+// Quem pode receber eventos de um paciente no stream (SSE), pela mesma regra de
+// app_can_access_patient: a equipe do paciente, ou qualquer profissional enquanto
+// ele não tem equipe. Contexto admin porque patient_care_team tem RLS e um
+// profissional só veria as próprias linhas.
+export const patientAudience = patientId => asAdmin(pool, async client => {
+  const { rows } = await client.query('SELECT professional_id FROM patient_care_team WHERE patient_id = $1', [patientId]);
+  return { everyone: rows.length === 0, professionalIds: rows.map(row => row.professional_id) };
+});
+
 // Precisa de contexto admin e doPrivilegio de dono: `admins` tem RLS, e sem um
 // papel valido a consulta volta vazia e o bootstrap recriava a conta a cada login.
 export const hasAnyAccount = async () => {
