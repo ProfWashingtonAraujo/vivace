@@ -8,6 +8,10 @@ import * as store from './db/store.mjs';
 import { clientAddress as resolveClientAddress } from './lib/client-ip.mjs';
 import { loginKeys as buildLoginKeys } from './lib/login-keys.mjs';
 import { shouldDeliver } from './lib/event-audience.mjs';
+import { resolveBootstrap } from './lib/bootstrap-config.mjs';
+import { parseJson, readBody, safeHandler } from './lib/http.mjs';
+import { parseImageUpload } from './lib/image-upload.mjs';
+import { removesLastAdmin } from './lib/state-guards.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
@@ -153,27 +157,38 @@ const json = (request, response, status, value, extraHeaders = {}) => {
 const unauthorized = (request, response) => json(request, response, 401, { error: 'Authentication required' });
 const forbidden = (request, response) => json(request, response, 403, { error: 'Insufficient permissions' });
 
-const readBody = request => new Promise((resolve, reject) => {
-  const chunks = [];
-  let size = 0;
-  request.on('data', chunk => {
-    size += chunk.length;
-    if (size > 25 * 1024 * 1024) {
-      reject(new Error('Payload too large'));
-      request.destroy();
-      return;
-    }
-    chunks.push(chunk);
-  });
-  request.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-  request.on('error', reject);
-});
+// Teto de corpo por rota. Antes eram 25 MB em todas, inclusive no login, e o
+// JSON.parse de um corpo desse tamanho bloqueia o event loop. Só o PUT do estado
+// inteiro e o check-in com foto precisam de corpo grande.
+const bodyLimits = {
+  login: 4 * 1024,
+  message: 16 * 1024,
+  medication: 4 * 1024,
+  checkIn: 8 * 1024 * 1024,
+  state: 25 * 1024 * 1024
+};
+const maxPhotoBytes = 6 * 1024 * 1024;
+const maxShortField = 100;
+
+// Falha na subida, e não no primeiro login: hospedado sem senha própria do
+// administrador a API não sobe.
+const bootstrapConfig = resolveBootstrap();
+
+const shortText = (value, fallback) => (typeof value === 'string' && value && value.length <= maxShortField ? value : fallback);
+
+const failureStatus = error => ([400, 403, 404, 413].includes(error.statusCode) ? error.statusCode : 500);
+const failureMessage = (error, fallback) => ({
+  400: 'Requisição inválida',
+  403: 'Insufficient permissions',
+  404: 'Patient not found',
+  413: 'Corpo da requisição grande demais'
+}[failureStatus(error)] ?? fallback);
 
 const bootstrapAdmin = async () => store.bootstrapAdmin({
   id: 'adm-1',
   name: 'Administrador',
-  email: process.env.VIVACE_BOOTSTRAP_EMAIL ?? 'admin@vivace.med.br',
-  password: process.env.VIVACE_BOOTSTRAP_PASSWORD ?? 'vivace-demo'
+  email: bootstrapConfig.email,
+  password: bootstrapConfig.password
 });
 
 // A conta de administracao nasce no primeiro acesso, quando o banco esta vazio
@@ -303,7 +318,7 @@ const authorize = async (request, response) => {
   return session;
 };
 
-const api = createServer(async (request, response) => {
+const handleRequest = async (request, response) => {
   const { pathname } = new URL(request.url, `http://${request.headers.host ?? 'localhost'}`);
 
   if (request.method === 'OPTIONS') {
@@ -317,7 +332,7 @@ const api = createServer(async (request, response) => {
 
   if (pathname === '/api/auth/login' && request.method === 'POST') {
     try {
-      const input = JSON.parse(await readBody(request));
+      const input = parseJson(await readBody(request, bodyLimits.login));
       const identifier = typeof input.username === 'string' ? input.username.trim() : '';
       const password = typeof input.password === 'string' ? input.password : '';
       if (!identifier || !password) {
@@ -377,7 +392,7 @@ const api = createServer(async (request, response) => {
       });
     } catch (error) {
       console.error('Login API error:', error);
-      json(request, response, 500, { error: 'Não foi possível autenticar' });
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Não foi possível autenticar') });
     }
     return;
   }
@@ -411,7 +426,7 @@ const api = createServer(async (request, response) => {
     const session = await authorize(request, response);
     if (!session) return;
     try {
-      const input = JSON.parse(await readBody(request));
+      const input = parseJson(await readBody(request, bodyLimits.message));
       const text = typeof input.text === 'string' ? input.text.trim() : '';
       if (!input.patientId || !text || text.length > 2_000) {
         json(request, response, 400, { error: 'Invalid message' });
@@ -424,19 +439,19 @@ const api = createServer(async (request, response) => {
       const sender = session.role === 'patient' ? 'paciente' : 'equipe';
       const senderName = session.role === 'patient'
         ? session.name
-        : typeof input.senderName === 'string' && input.senderName.trim() ? input.senderName.trim() : session.name;
+        : shortText(typeof input.senderName === 'string' ? input.senderName.trim() : '', session.name);
       const message = await store.insertMessage(session, {
         patientId: input.patientId,
         text,
         sender,
         senderName,
-        clientMessageId: input.clientMessageId
+        clientMessageId: shortText(input.clientMessageId, undefined)
       });
       json(request, response, 201, { message });
       publishSafely({ type: 'message.created', patientId: input.patientId, message });
     } catch (error) {
       console.error('Message API error:', error);
-      json(request, response, error.statusCode ?? 500, { error: error.statusCode === 404 ? 'Patient not found' : 'Could not persist message' });
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not persist message') });
     }
     return;
   }
@@ -445,7 +460,7 @@ const api = createServer(async (request, response) => {
     const session = await authorize(request, response);
     if (!session) return;
     try {
-      const input = JSON.parse(await readBody(request));
+      const input = parseJson(await readBody(request, bodyLimits.checkIn));
       const patientId = session.role === 'patient' ? session.userId : input.patientId;
       const payload = input.checkIn;
       const painLevel = Number(payload?.painLevel);
@@ -455,26 +470,36 @@ const api = createServer(async (request, response) => {
         json(request, response, 400, { error: 'Invalid check-in' });
         return;
       }
+      // Foto enviada tem que ser jpeg, png ou webp de verdade e caber no teto.
+      // Antes bastava o prefixo `data:image/`, e SVG ou texto entravam como imagem.
+      const sentImage = input.photo?.imageUrl;
+      const upload = sentImage ? parseImageUpload(sentImage, maxPhotoBytes) : null;
+      if (sentImage && !upload) {
+        json(request, response, 400, { error: 'Foto inválida: envie JPEG, PNG ou WebP de até 6 MB' });
+        return;
+      }
       const checkIn = {
-        id: typeof input.id === 'string' && input.id ? input.id : `chk-${randomUUID()}`,
+        id: shortText(input.id, `chk-${randomUUID()}`),
         painLevel,
         temperature,
-        mobilityScore: typeof payload.mobilityScore === 'string' ? payload.mobilityScore : 'repouso_absoluto',
-        symptoms: Array.isArray(payload.symptoms) ? payload.symptoms.filter(item => typeof item === 'string').slice(0, 12) : [],
+        mobilityScore: shortText(payload.mobilityScore, 'repouso_absoluto'),
+        symptoms: Array.isArray(payload.symptoms)
+          ? payload.symptoms.filter(item => typeof item === 'string' && item.length <= maxShortField).slice(0, 12)
+          : [],
         notes: typeof payload.notes === 'string' ? payload.notes.slice(0, 1_000) : '',
-        mood: typeof payload.mood === 'string' ? payload.mood : 'bem',
-        dayLabel: typeof payload.dayLabel === 'string' ? payload.dayLabel : undefined,
-        photoUploaded: Boolean(input.photo?.imageUrl)
+        mood: shortText(payload.mood, 'bem'),
+        dayLabel: shortText(payload.dayLabel, undefined),
+        photoUploaded: Boolean(upload)
       };
-      const photo = typeof input.photo?.imageUrl === 'string' && input.photo.imageUrl.startsWith('data:image/')
-        ? { imageUrl: input.photo.imageUrl, patientNotes: typeof input.photo.patientNotes === 'string' ? input.photo.patientNotes.slice(0, 1_000) : '', id: typeof input.photo.id === 'string' ? input.photo.id : undefined }
+      const photo = upload
+        ? { imageUrl: sentImage, patientNotes: typeof input.photo.patientNotes === 'string' ? input.photo.patientNotes.slice(0, 1_000) : '', id: shortText(input.photo.id, undefined) }
         : undefined;
       const savedPatient = await store.insertCheckIn(session, { patientId, checkIn, photo });
       json(request, response, 201, { patient: savedPatient });
       publishSafely({ type: 'checkin.created', patientId, checkIn });
     } catch (error) {
       console.error('Check-in API error:', error);
-      json(request, response, error.statusCode ?? 500, { error: error.statusCode === 404 ? 'Patient not found' : 'Could not save check-in' });
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not save check-in') });
     }
     return;
   }
@@ -483,7 +508,7 @@ const api = createServer(async (request, response) => {
     const session = await authorize(request, response);
     if (!session) return;
     try {
-      const input = JSON.parse(await readBody(request));
+      const input = parseJson(await readBody(request, bodyLimits.medication));
       const patientId = session.role === 'patient' ? session.userId : input.patientId;
       if (!patientId || typeof input.medicationId !== 'string' || typeof input.time !== 'string') {
         json(request, response, 400, { error: 'Invalid medication confirmation' });
@@ -498,7 +523,7 @@ const api = createServer(async (request, response) => {
       publishSafely({ type: 'medication.updated', patientId });
     } catch (error) {
       console.error('Medication API error:', error);
-      json(request, response, error.statusCode ?? 500, { error: error.statusCode === 404 ? 'Patient not found' : 'Could not save confirmation' });
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not save confirmation') });
     }
     return;
   }
@@ -526,13 +551,17 @@ const api = createServer(async (request, response) => {
         forbidden(request, response);
         return;
       }
-      const incoming = JSON.parse(await readBody(request));
+      const incoming = parseJson(await readBody(request, bodyLimits.state));
       if (!Array.isArray(incoming.patients) || !Array.isArray(incoming.professionals)) {
         json(request, response, 400, { error: 'Invalid state' });
         return;
       }
       if (incoming.admins !== undefined && !Array.isArray(incoming.admins)) {
         json(request, response, 400, { error: 'Invalid state' });
+        return;
+      }
+      if (removesLastAdmin(session, incoming)) {
+        json(request, response, 400, { error: 'É preciso manter pelo menos um administrador' });
         return;
       }
       await store.putState(session, incoming);
@@ -542,9 +571,22 @@ const api = createServer(async (request, response) => {
     json(request, response, 405, { error: 'Method not allowed' });
   } catch (error) {
     console.error('API error:', error);
-    if (!response.headersSent) json(request, response, 500, { error: 'Could not persist data' });
+    if (!response.headersSent) json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not persist data') });
   }
-});
+};
+
+// Qualquer erro que escape de uma rota (consulta de sessão, banco fora do ar...)
+// responde 500 em vez de derrubar o processo.
+const api = createServer(safeHandler(handleRequest, (error, request, response) => {
+  console.error('Erro não tratado na requisição:', error);
+  if (response.headersSent) {
+    response.end();
+    return;
+  }
+  json(request, response, failureStatus(error), { error: failureMessage(error, 'Erro interno') });
+}));
+
+process.on('unhandledRejection', reason => console.error('Rejeição não tratada:', reason));
 
 api.listen(apiPort, '0.0.0.0', () => {
   console.log(`Vivace API: http://localhost:${apiPort}`);

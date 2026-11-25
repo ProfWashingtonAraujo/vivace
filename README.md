@@ -111,7 +111,7 @@ VIVACE_FRONTEND_PORT=4321 VIVACE_API_PORT=4001 npm run dev
 - `MIGRATION_DATABASE_URL`: conexão usada pelas migrações e pelo import, que precisam de privilégio de dono
 - `VIVACE_SKIP_FRONTEND=true`: inicia apenas a API
 - `VIVACE_SESSION_TTL_MS`: validade da sessão em milissegundos (padrão `28800000`, 8 horas)
-- `VIVACE_BOOTSTRAP_EMAIL` / `VIVACE_BOOTSTRAP_PASSWORD`: credenciais do administrador inicial (padrão `admin@vivace.med.br` / `vivace-demo`)
+- `VIVACE_BOOTSTRAP_EMAIL` / `VIVACE_BOOTSTRAP_PASSWORD`: credenciais do administrador inicial. Em desenvolvimento o padrão é `admin@vivace.med.br` / `vivace-demo`. **Hospedado (Render ou `NODE_ENV=production`) a API não sobe** sem uma `VIVACE_BOOTSTRAP_PASSWORD` própria, com pelo menos 10 caracteres e diferente de `vivace-demo`.
 - `VIVACE_ALLOWED_ORIGINS`: origens extras liberadas no CORS, separadas por vírgula
 
 Verifique se as portas estão livres antes de iniciar:
@@ -138,7 +138,7 @@ O front é estático e vai para a Vercel. A API (`server.mjs`) é um servidor No
   - `VIVACE_SKIP_FRONTEND=true`
   - `VIVACE_API_PORT`: a porta que o Render informa em `PORT` (padrão `10000`).
   - `VIVACE_ALLOWED_ORIGINS`: a URL pública do front na Vercel, com `https://`, sem barra no fim.
-  - `VIVACE_BOOTSTRAP_PASSWORD`: troque a senha padrão da administração.
+  - `VIVACE_BOOTSTRAP_PASSWORD`: obrigatória. Pelo menos 10 caracteres e diferente de `vivace-demo`, senão a API recusa subir.
   - `VIVACE_SEED_DEMO=false` se não quiser os dados de demonstração.
 
 **3. Vercel (front).** Projeto ligado a este repositório. O `vercel.json` já define o build (`npm run build:vercel`) e a saída (`dist/browser`). Defina a variável `VIVACE_API_URL` com a URL pública da API no Render (sem barra no fim); ela é gravada no bundle em tempo de build e o build falha se ela faltar. Depois de mudar a URL da API é preciso um novo deploy.
@@ -168,6 +168,14 @@ Contas de demonstração (senha `vivace-demo`):
 | Administração | `admin@vivace.med.br` |
 
 No primeiro acesso a API cria a conta de administração inicial. Ao entrar como administrador, todas as senhas ainda em texto plano da base são convertidas para `scrypt`.
+
+### Tamanho de corpo, fotos e erros
+
+Cada rota tem o próprio teto de corpo: login 4 KB, mensagem 16 KB, confirmação de medicação 4 KB, check-in com foto 8 MB e `PUT /api/state` 25 MB. Passar do teto responde `413`, e JSON inválido responde `400` (antes ambos viravam `500`). A foto de um check-in precisa ser JPEG, PNG ou WebP de verdade, conferida pelos bytes iniciais do arquivo e não só pelo tipo declarado, com até 6 MB depois de decodificada; SVG e texto disfarçado de imagem são recusados com `400`. Campos curtos (`mood`, `dayLabel`, `mobilityScore`, `senderName`, ids e cada sintoma) aceitam até 100 caracteres.
+
+O `PUT /api/state` do administrador não pode deixar o sistema sem administrador: uma lista de `admins` vazia ou ausente responde `400`.
+
+Qualquer erro que escape de uma rota, como uma falha de banco ao consultar a sessão, responde `500` e o processo continua de pé. Ainda não existe cota diária de check-ins ou fotos por paciente, porque a tabela `check_ins` não guarda a hora de criação.
 
 ### Limite de tentativas de login
 

@@ -841,3 +841,72 @@ describe('C2: o limite de tentativas de login nao se contorna', () => {
     assert.equal(longPassword.status, 400);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Achados I5 e I6 da revisao (parte que precisa de banco): foto enviada,
+// tamanho do check-in e a trava do ultimo administrador.
+
+const tinyJpeg = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 16, 0x4a, 0x46, 0x49, 0x46, 0, 1]).toString('base64')}`;
+const checkInBody = photo => ({
+  id: `chk-i6-${Math.random().toString(36).slice(2, 8)}`,
+  checkIn: { painLevel: 2, temperature: 36.5, mobilityScore: 'repouso_absoluto', symptoms: [], notes: 'ok', mood: 'bem' },
+  ...(photo === undefined ? {} : { photo: { imageUrl: photo, patientNotes: 'foto' } })
+});
+
+describe('I6: foto e tamanho do check-in', () => {
+  let token;
+  before(async () => {
+    token = (await login('mariana')).token;
+  });
+
+  it('jpeg real e aceito', async () => {
+    const result = await call('/api/checkins', { method: 'POST', token, body: checkInBody(tinyJpeg) });
+    assert.equal(result.status, 201, JSON.stringify(result.body));
+  });
+
+  it('SVG disfarçado de imagem e recusado com 400', async () => {
+    const svg = `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>').toString('base64')}`;
+    const result = await call('/api/checkins', { method: 'POST', token, body: checkInBody(svg) });
+    assert.equal(result.status, 400);
+  });
+
+  it('texto declarado como jpeg e recusado com 400', async () => {
+    const fake = `data:image/jpeg;base64,${Buffer.from('isto nao e uma imagem').toString('base64')}`;
+    const result = await call('/api/checkins', { method: 'POST', token, body: checkInBody(fake) });
+    assert.equal(result.status, 400);
+  });
+
+  it('check-in sem foto continua valido', async () => {
+    const result = await call('/api/checkins', { method: 'POST', token, body: checkInBody(undefined) });
+    assert.equal(result.status, 201);
+  });
+
+  it('corpo de check-in acima do teto de 8 MB vira 413, nao 500', async () => {
+    const huge = `data:image/jpeg;base64,${'A'.repeat(9 * 1024 * 1024)}`;
+    const result = await call('/api/checkins', { method: 'POST', token, body: checkInBody(huge) });
+    assert.equal(result.status, 413);
+  });
+
+  it('login com corpo acima de 4 KB vira 413', async () => {
+    const result = await call('/api/auth/login', { method: 'POST', ip: '10.9.8.1', body: { username: 'mariana', password: 'x'.repeat(10_000) } });
+    assert.equal(result.status, 413);
+  });
+});
+
+describe('I5: o ultimo administrador nao pode ser apagado pelo PUT', () => {
+  it('admin enviando lista de admins vazia recebe 400 e continua existindo', async () => {
+    const admin = (await login('admin@vivace.med.br')).token;
+    const full = (await call('/api/state', { token: admin })).body;
+    const attempt = await call('/api/state', { method: 'PUT', token: admin, body: { ...full, admins: [] } });
+    assert.equal(attempt.status, 400);
+    const after = (await call('/api/state', { token: admin })).body;
+    assert.equal(after.admins.length, 1);
+  });
+
+  it('admin sem o campo admins tambem e recusado', async () => {
+    const admin = (await login('admin@vivace.med.br')).token;
+    const { admins, ...withoutAdmins } = (await call('/api/state', { token: admin })).body;
+    const attempt = await call('/api/state', { method: 'PUT', token: admin, body: withoutAdmins });
+    assert.equal(attempt.status, 400);
+  });
+});
