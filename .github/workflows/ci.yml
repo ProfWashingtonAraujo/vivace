@@ -77,6 +77,12 @@ jobs:
         if: failure()
         run: node scripts/annotate-junit.mjs "$RUNNER_TEMP/junit.xml"
 
+      # Os erros que o servidor de teste escreveu no próprio log (por exemplo, o motivo
+      # de um 500), também como anotações.
+      - name: Erros do servidor de teste como anotações
+        if: failure()
+        run: node scripts/annotate-log.mjs /tmp/vivace-api-test-*.log
+
   front:
     name: Build do front
     runs-on: ubuntu-latest

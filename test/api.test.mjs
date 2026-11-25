@@ -49,7 +49,10 @@ let serverPid = null;
 const startServer = async (env = {}) => {
   // detached + stdio em arquivo: se o processo filho herdar o stdout, o runner
   // de teste nunca ve EOF e trava.
-  const log = openSync('/tmp/vivace-api-test.log', 'w');
+  // Um arquivo por porta, em modo de anexar: os testes reiniciam o servidor, e com
+  // 'w' o log de cada reinicio apagava o do anterior, escondendo o erro de um teste
+  // que falhou antes.
+  const log = openSync(`/tmp/vivace-api-test-${env.VIVACE_API_PORT ?? '3194'}.log`, 'a');
   const server = spawn(process.execPath, ['server.mjs'], {
     cwd: root,
     detached: true,
