@@ -369,6 +369,18 @@ const writePhotos = async (client, patientId, photos) => {
   }
 };
 
+// account_credentials nao tem SELECT para a aplicacao (nem privilegio, nem
+// policy). Isso impede ate um UPDATE ... WHERE, porque citar coluna no WHERE
+// exige SELECT sobre ela. A escrita passa por app_set_credential, que e
+// SECURITY DEFINER, como o login ja usava app_lookup_account.
+const storePassword = async (client, accountId, role, password) => {
+  if (typeof password !== 'string' || !password) return;
+  const passwordHash = isHashed(password)
+    ? password
+    : await hashPassword(randomUUID().replace(/-/g, '').slice(0, 16), password);
+  await client.query('SELECT app_set_credential($1, $2, $3)', [accountId, role, passwordHash]);
+};
+
 const writePatient = async (client, patient, { role, userId }) => {
   const contact = patient.emergencyContact ?? {};
   await client.query(

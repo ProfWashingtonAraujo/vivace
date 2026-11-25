@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { openSync } from 'node:fs';
+import { openSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
@@ -9,6 +9,8 @@ import { createPool } from '../db/session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const base = 'http://127.0.0.1:3194';
+// O mesmo arquivo que o import usa para alimentar o banco (veja db/import-from-json.mjs).
+const importFile = process.env.VIVACE_IMPORT_FILE ?? resolve(root, '.data', 'vivace-state.json');
 const json = { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' };
 
 // Conecta como vivace_api, o papel da aplicação, para os testes de sessão e
@@ -331,30 +333,31 @@ describe('ordem das colecoes', () => {
     const token = (await login('Rafaely Carvalho')).token;
     const patient = (await call('/api/state', { token })).body.patients.find(p => p.id === 'pat-1');
 
+    // Os ids "originais" vêm do mesmo arquivo que alimentou o banco, e não de ids
+    // escritos aqui: o arquivo de desenvolvimento de cada pessoa tem check-ins e fotos
+    // diferentes dos do seed do repositório.
+    const original = JSON.parse(readFileSync(importFile, 'utf8')).patients.find(p => p.id === 'pat-1');
+
     // A UI le checkIns[0] como "de hoje", entao o mais recente entra no inicio.
     // Dois check-ins novos foram criados por outros testes, nesta ordem:
     // chk-e2e-1 e depois chk-intruso. O ultimo criado e o primeiro da lista.
     const checkIns = patient.checkIns.map(c => c.id);
     assert.equal(checkIns[0], 'chk-intruso');
     assert.equal(checkIns[1], 'chk-e2e-1');
-    assert.deepEqual(checkIns.slice(2), [
-      'chk-1790700384906', 'chk-1790699335797', 'chk-1', 'chk-2', 'chk-3'
-    ], 'os check-ins originais mantem a ordem relativa');
+    assert.deepEqual(checkIns.slice(2), original.checkIns.map(c => c.id), 'os check-ins originais mantem a ordem relativa');
 
     // A timeline e lida em ordem cronologica, entao cresce no fim.
     const timeline = patient.timeline.map(event => event.id);
-    assert.equal(timeline[0], 'tl-1');
+    assert.equal(timeline[0], original.timeline[0].id);
     assert.equal(timeline[timeline.length - 2], 'tl-chk-e2e-1');
     assert.equal(timeline[timeline.length - 1], 'tl-chk-intruso');
 
-    // Fotos nao mudam de ordem e continuam sendo 4.
-    assert.deepEqual(patient.woundPhotos.map(photo => photo.id), [
-      'wp-1790700384853', 'wp-1790699335745', 'wp-1', 'wp-2'
-    ]);
+    // Fotos nao mudam de ordem.
+    assert.deepEqual(patient.woundPhotos.map(photo => photo.id), original.woundPhotos.map(photo => photo.id));
 
     // Mensagens: as originais mais a do teste, em ordem de chegada.
     const messages = patient.messages.map(message => message.id);
-    assert.deepEqual(messages, ['msg-1', 'msg-2', 'msg-3', 'msg-teste-1']);
+    assert.deepEqual(messages, [...original.messages.map(message => message.id), 'msg-teste-1']);
   });
 
   it('medications preserva ordem e takenToday traz false explicito', async () => {
@@ -840,8 +843,13 @@ describe('C2: o limite de tentativas de login nao se contorna', () => {
   it('identificador e senha gigantes sao recusados antes de qualquer trabalho', async () => {
     const huge = await call('/api/auth/login', { method: 'POST', ip: '10.9.7.1', body: { username: 'a'.repeat(500), password: 'x' } });
     assert.equal(huge.status, 400);
+    // 5.000 caracteres passam do teto de corpo do login (4 KB): a recusa vem como 413,
+    // antes mesmo de olhar a senha.
     const longPassword = await call('/api/auth/login', { method: 'POST', ip: '10.9.7.2', body: { username: 'mariana', password: 'x'.repeat(5_000) } });
-    assert.equal(longPassword.status, 400);
+    assert.equal(longPassword.status, 413);
+    // Dentro do teto de corpo mas acima do limite de senha (1024): 400.
+    const longerThanLimit = await call('/api/auth/login', { method: 'POST', ip: '10.9.7.3', body: { username: 'mariana', password: 'x'.repeat(2_000) } });
+    assert.equal(longerThanLimit.status, 400);
   });
 });
 
