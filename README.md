@@ -75,6 +75,24 @@ O `PUT /api/state` ficou mais simples do que a versão em JS. O corpo chega inte
 
 As policies também corrigem um bug real: profissional passa a ver **apenas o próprio cadastro**, porque `professionalUser()` no frontend é `professionals()[0]` e, com todos visíveis, uma sessão do profissional #2 gravava o nome do #1 em `reviewedBy`, no autor da nota e no chat. O painel administrativo continua vendo todos, por ser papel `admin`.
 
+### Escrita por papel (migração 015)
+
+As tabelas filhas do paciente (linha do tempo, fotos, medicações, horários, doses, check-ins, mensagens e instruções) tinham uma única policy que não olhava o papel: quem lia o registro podia escrevê-lo. Para o papel `patient`, isso permitia, direto no banco, alterar a própria prescrição, mandar mensagem como `equipe`, mudar o resultado da avaliação de uma foto, forjar eventos da equipe na linha do tempo e trocar o próprio e-mail e nome (o login). Agora a leitura segue a regra de acesso ao paciente, admin e profissional com acesso escrevem como antes, e o paciente escreve apenas o que o fluxo dele precisa:
+
+| Tabela | O que o paciente pode escrever |
+| --- | --- |
+| `messages` | inserir, somente com `sender = 'paciente'`; sem editar nem apagar |
+| `check_ins` | inserir o próprio; `UPDATE` só da coluna `position` |
+| `wound_photos` | inserir sempre `pendente` e sem avaliação; `UPDATE` só de `position` |
+| `timeline_events` | inserir só `checkin` ou `curativo`, assinado `... (Paciente)` |
+| `medication_doses` | confirmar e desfazer; `UPDATE` só de `taken` |
+| `patients` | só `current_pain`, `current_temp`, `last_check_in_time`, `status`, `wound_review_pending` e `medication_adherence_percent` |
+| `medications`, `medication_times`, `instructions`, `clinical_notes` | nada |
+
+Uma policy não enxerga a linha antiga, então o limite por coluna é um gatilho (`app_guard_patient_columns`) que compara a linha inteira em `jsonb`: uma coluna nova no futuro já nasce protegida. Os sinais do check-in e a aderência continuam graváveis pelo paciente porque o servidor os calcula a partir do que ele envia.
+
+**Equipe do paciente.** Um profissional só remove a si mesmo da equipe, e só se ela continua com mais alguém (`app_keep_care_team`); esvaziar uma equipe é decisão do admin. Isso importa porque um paciente sem equipe fica visível a todos os profissionais (a regra atual, usada pelo `pat-2` da demonstração). Essa própria regra continua em vigor: um paciente que **já** não tem equipe segue visível a qualquer profissional, e quem o vê pode redefinir a senha dele pelo `PUT`.
+
 ### Quatro armadilhas que custaram tempo
 
 - **Policies não se aplicam ao dono da tabela.** `MIGRATION_DATABASE_URL` (`vivace`) cria o schema; `DATABASE_URL` (`vivace_api`) é o papel da aplicação. Há também `FORCE ROW LEVEL SECURITY` em todas as tabelas. Os testes conectam como `vivace_api` de propósito: testar com o dono não provaria nada.

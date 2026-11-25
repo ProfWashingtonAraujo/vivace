@@ -247,3 +247,186 @@ describe('falha fechada e hash de senha', () => {
     assert.equal(rows[0].user_id, 'prof-1');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Achados I1 e I9 da revisao: o RLS nao pode dar escrita ampla ao papel de
+// paciente, e ninguem alem do admin pode deixar um paciente sem equipe.
+
+// Uma escrita negada pode aparecer de dois jeitos: erro 42501 (INSERT que viola
+// WITH CHECK, ou o guarda de colunas) ou zero linhas afetadas (UPDATE e DELETE
+// sao filtrados linha a linha pela policy). Os dois bloqueiam; o que nao pode
+// acontecer e a escrita passar.
+const blocked = async (session, sql, params) => {
+  try {
+    return (await run(session, sql, params)).rowCount === 0;
+  } catch (error) {
+    return error.code === '42501';
+  }
+};
+
+describe('I1: o paciente nao escreve alem do que lhe cabe', () => {
+  it('nao altera, cria nem apaga a propria prescricao', async () => {
+    assert.ok(await blocked(patient('pat-1'), "UPDATE medications SET name = 'alterado', dose = '999mg' WHERE patient_id = 'pat-1'"));
+    assert.ok(await blocked(patient('pat-1'),
+      `INSERT INTO medications (patient_id, id, position, name) VALUES ('pat-1', 'med-forjada', 99, 'Opioide')`));
+    assert.ok(await blocked(patient('pat-1'), "DELETE FROM medications WHERE patient_id = 'pat-1'"));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM medications WHERE name = 'alterado' OR id = 'med-forjada'"), 0);
+    assert.ok(await count(admin, "SELECT count(*)::int AS total FROM medications WHERE patient_id = 'pat-1'") > 0, 'a prescricao foi apagada');
+  });
+
+  it('nao escreve nas instrucoes nem nos horarios dos medicamentos', async () => {
+    assert.ok(await blocked(patient('pat-1'), "UPDATE instructions SET content = 'x' WHERE patient_id = 'pat-1'"));
+    assert.ok(await blocked(patient('pat-1'), "DELETE FROM medication_times WHERE patient_id = 'pat-1'"));
+  });
+
+  it('nao forja mensagem da equipe, mas manda a propria', async () => {
+    assert.ok(await blocked(patient('pat-1'),
+      `INSERT INTO messages (patient_id, id, position, sender, sender_name, timestamp, text, is_read)
+       VALUES ('pat-1', 'msg-forjada', 99, 'equipe', 'Dra. Falsa', '10:00', 'conduta alterada', false)`));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM messages WHERE id = 'msg-forjada'"), 0);
+
+    const own = await run(patient('pat-1'),
+      `INSERT INTO messages (patient_id, id, position, sender, sender_name, timestamp, text, is_read)
+       VALUES ('pat-1', 'msg-propria-i1', 98, 'paciente', 'Mariana Souza', '10:01', 'ola', false)`);
+    assert.equal(own.rowCount, 1);
+    await run(admin, "DELETE FROM messages WHERE id = 'msg-propria-i1'");
+  });
+
+  it('nao reescreve nem apaga mensagens ja enviadas', async () => {
+    assert.ok(await blocked(patient('pat-1'), "UPDATE messages SET text = 'editado', sender = 'equipe' WHERE patient_id = 'pat-1'"));
+    assert.ok(await blocked(patient('pat-1'), "DELETE FROM messages WHERE patient_id = 'pat-1'"));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM messages WHERE text = 'editado'"), 0);
+  });
+
+  it('nao muda o resultado da avaliacao de uma foto, nem a envia ja aprovada', async () => {
+    assert.ok(await blocked(patient('pat-1'),
+      "UPDATE wound_photos SET review_status = 'avaliado_adequado', reviewed_by = 'Dr. Falso' WHERE patient_id = 'pat-1'"));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM wound_photos WHERE reviewed_by = 'Dr. Falso'"), 0);
+    assert.ok(await blocked(patient('pat-1'),
+      `INSERT INTO wound_photos (patient_id, id, position, date, day_label, image_source_url, patient_notes, review_status, review_feedback, reviewed_by, reviewed_at)
+       VALUES ('pat-1', 'wp-forjada', 0, '', 'D+1', 'x', '', 'avaliado_adequado', '', 'Dr. Falso', '')`));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM wound_photos WHERE id = 'wp-forjada'"), 0);
+  });
+
+  it('envia foto pendente e reordena as proprias fotos (o fluxo do check-in)', async () => {
+    const shifted = await run(patient('pat-1'), "UPDATE wound_photos SET position = position + 1 WHERE patient_id = 'pat-1'");
+    assert.ok(shifted.rowCount >= 0);
+    const inserted = await run(patient('pat-1'),
+      `INSERT INTO wound_photos (patient_id, id, position, date, day_label, image_source_url, patient_notes, review_status, review_feedback, reviewed_by, reviewed_at)
+       VALUES ('pat-1', 'wp-i1-ok', 0, '', 'D+1', 'x', 'minha foto', 'pendente', '', '', '')`);
+    assert.equal(inserted.rowCount, 1);
+    await run(admin, "DELETE FROM wound_photos WHERE id = 'wp-i1-ok'");
+  });
+
+  it('nao forja evento da equipe na linha do tempo, mas registra o proprio check-in', async () => {
+    assert.ok(await blocked(patient('pat-1'),
+      `INSERT INTO timeline_events (patient_id, id, position, date, day_label, title, description, author, type)
+       VALUES ('pat-1', 'tl-forjado', 99, '', 'D+1', 'Prescricao alterada', 'x', 'Dr. Falso', 'prescricao')`));
+    assert.ok(await blocked(patient('pat-1'),
+      `INSERT INTO timeline_events (patient_id, id, position, date, day_label, title, description, author, type)
+       VALUES ('pat-1', 'tl-forjado-2', 99, '', 'D+1', 'x', 'x', 'Dr. Falso', 'checkin')`));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM timeline_events WHERE id LIKE 'tl-forjado%'"), 0);
+
+    const own = await run(patient('pat-1'),
+      `INSERT INTO timeline_events (patient_id, id, position, date, day_label, title, description, author, type)
+       VALUES ('pat-1', 'tl-i1-ok', 99, '', 'D+1', 'Check-in', 'x', 'Mariana Souza (Paciente)', 'checkin')`);
+    assert.equal(own.rowCount, 1);
+    await run(admin, "DELETE FROM timeline_events WHERE id = 'tl-i1-ok'");
+  });
+
+  it('nao altera os proprios dados cadastrais (identidade, contato, procedimento)', async () => {
+    for (const change of [
+      "email = 'tomada@x.com'", "name = 'Outro Nome'", "cpf = '000.000.000-00'", "phone = '(00) 0'",
+      "procedure = 'outro'", "allergies = 'nenhuma'", "hospital = 'outro'", "surgeon_label = 'Dr. Falso'"
+    ]) {
+      assert.ok(await blocked(patient('pat-1'), `UPDATE patients SET ${change} WHERE id = 'pat-1'`), `alterou ${change}`);
+    }
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patients WHERE email = 'tomada@x.com' OR name = 'Outro Nome'"), 0);
+  });
+
+  it('atualiza os sinais do proprio check-in (o fluxo do check-in)', async () => {
+    const result = await run(patient('pat-1'),
+      `UPDATE patients SET current_pain = 3, current_temp = 36.6, last_check_in_time = 'Hoje', status = 'estavel',
+         wound_review_pending = true, medication_adherence_percent = 90 WHERE id = 'pat-1'`);
+    assert.equal(result.rowCount, 1);
+  });
+
+  it('confirma doses (inclui virar a confirmacao), mas nao muda a que dose pertence', async () => {
+    const dose = (await run(admin, "SELECT medication_id, time FROM medication_doses WHERE patient_id = 'pat-1' LIMIT 1")).rows[0];
+    const med = dose ?? (await run(admin,
+      "SELECT m.id AS medication_id, t.time FROM medications m JOIN medication_times t ON t.patient_id = m.patient_id AND t.medication_id = m.id WHERE m.patient_id = 'pat-1' LIMIT 1")).rows[0];
+    assert.ok(med, 'sem dose para testar');
+    const toggled = await run(patient('pat-1'),
+      `INSERT INTO medication_doses (patient_id, medication_id, time, taken) VALUES ('pat-1', $1, $2, true)
+       ON CONFLICT (patient_id, medication_id, time) DO UPDATE SET taken = NOT medication_doses.taken`, [med.medication_id, med.time]);
+    assert.equal(toggled.rowCount, 1);
+    assert.ok(await blocked(patient('pat-1'),
+      "UPDATE medication_doses SET time = 'qualquer' WHERE patient_id = 'pat-1'"));
+    assert.ok(await blocked(patient('pat-1'), "DELETE FROM medication_doses WHERE patient_id = 'pat-1'"));
+  });
+
+  it('nao toca nos dados de outro paciente', async () => {
+    assert.ok(await blocked(patient('pat-1'), "UPDATE patients SET current_pain = 9 WHERE id = 'pat-3'"));
+    assert.ok(await blocked(patient('pat-1'), "UPDATE check_ins SET pain_level = 0 WHERE patient_id = 'pat-3'"));
+  });
+
+  it('a equipe continua escrevendo normalmente', async () => {
+    const medication = await run(professional('prof-1'), "UPDATE medications SET instructions = 'tomar apos o cafe' WHERE patient_id = 'pat-3'");
+    assert.ok(medication.rowCount >= 1);
+    const message = await run(professional('prof-1'),
+      `INSERT INTO messages (patient_id, id, position, sender, sender_name, timestamp, text, is_read)
+       VALUES ('pat-3', 'msg-equipe-i1', 99, 'equipe', 'Rafaely Carvalho', '10:00', 'ola', false)`);
+    assert.equal(message.rowCount, 1);
+    const review = await run(professional('prof-1'), "UPDATE wound_photos SET review_feedback = 'ok' WHERE patient_id = 'pat-3'");
+    assert.ok(review.rowCount >= 0);
+    await run(admin, "DELETE FROM messages WHERE id = 'msg-equipe-i1'");
+    const adminWrite = await run(admin, "UPDATE patients SET blood_pressure = '110/70 mmHg' WHERE id = 'pat-3'");
+    assert.equal(adminWrite.rowCount, 1);
+  });
+});
+
+describe('I9: a equipe do paciente nao se esvazia por baixo', () => {
+  it('profissional nao tira um colega da equipe', async () => {
+    assert.ok(await blocked(professional('prof-1'),
+      "DELETE FROM patient_care_team WHERE patient_id = 'pat-1' AND professional_id = 'prof-2'"));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-1' AND professional_id = 'prof-2'"), 1);
+  });
+
+  it('profissional nao deixa o paciente sem equipe saindo dela', async () => {
+    // pat-3 so tem o prof-1. Sair deixaria o paciente sem equipe, e sem equipe ele
+    // fica visivel a qualquer profissional.
+    assert.ok(await blocked(professional('prof-1'),
+      "DELETE FROM patient_care_team WHERE patient_id = 'pat-3' AND professional_id = 'prof-1'"));
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-3'"), 1);
+  });
+
+  it('profissional pode sair quando a equipe continua com alguem', async () => {
+    const left = await run(professional('prof-2'),
+      "DELETE FROM patient_care_team WHERE patient_id = 'pat-1' AND professional_id = 'prof-2'");
+    assert.equal(left.rowCount, 1);
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-1'"), 1);
+    await run(admin,
+      `INSERT INTO patient_care_team (patient_id, professional_id, role, position)
+       VALUES ('pat-1', 'prof-2', 'equipe', 1) ON CONFLICT DO NOTHING`);
+  });
+
+  it('o admin pode esvaziar uma equipe (decisao administrativa)', async () => {
+    const removed = await run(admin, "DELETE FROM patient_care_team WHERE patient_id = 'pat-4'");
+    assert.ok(removed.rowCount >= 1);
+    await run(admin,
+      `INSERT INTO patient_care_team (patient_id, professional_id, role, position)
+       VALUES ('pat-4', 'prof-1', 'cirurgiao', 0) ON CONFLICT DO NOTHING`);
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-4'"), 1);
+  });
+
+  it('apagar o paciente leva a equipe junto, sem o guarda atrapalhar', async () => {
+    await run(admin,
+      `INSERT INTO patients SELECT (jsonb_populate_record(NULL::patients, to_jsonb(p) || '{"id":"pat-tmp-i9","email":"tmp-i9@x.com","name":"Temporario I9"}'::jsonb)).*
+         FROM patients p WHERE p.id = 'pat-3'`);
+    await run(admin,
+      `INSERT INTO patient_care_team (patient_id, professional_id, role, position) VALUES ('pat-tmp-i9', 'prof-1', 'cirurgiao', 0)`);
+    const removed = await run(professional('prof-1'), "DELETE FROM patients WHERE id = 'pat-tmp-i9'");
+    assert.equal(removed.rowCount, 1);
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-tmp-i9'"), 0);
+  });
+});
