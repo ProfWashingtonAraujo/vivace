@@ -8,6 +8,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +16,13 @@ import { asAdmin, createPool, withSession } from '../db/session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pool = createPool();
+
+// As contagens esperadas vêm do mesmo arquivo que alimentou o banco, e não de números
+// escritos aqui: o arquivo de desenvolvimento de cada pessoa tem mais check-ins e notas
+// do que o seed do repositório, e um número fixo só passaria numa dessas bases.
+const importFile = process.env.VIVACE_IMPORT_FILE ?? join(root, '.data', 'vivace-state.json');
+const sizeOf = (patientId, collection) =>
+  JSON.parse(readFileSync(importFile, 'utf8')).patients.find(item => item.id === patientId)[collection].length;
 
 // Usa o mesmo withSession do servidor, para o teste exercitar o caminho real
 // de GUCs em vez de uma copia que pode divergir.
@@ -101,20 +109,21 @@ describe('visibilidade por papel', () => {
 
 describe('negacao em tabelas filhas', () => {
   it('paciente nao le check-ins de outro paciente', async () => {
-    assert.equal(await count(patient('pat-1'), 'SELECT count(*)::int AS total FROM check_ins'), 5);
-    assert.equal(await count(patient('pat-2'), 'SELECT count(*)::int AS total FROM check_ins'), 1);
+    assert.equal(await count(patient('pat-1'), 'SELECT count(*)::int AS total FROM check_ins'), sizeOf('pat-1', 'checkIns'));
+    assert.equal(await count(patient('pat-2'), 'SELECT count(*)::int AS total FROM check_ins'), sizeOf('pat-2', 'checkIns'));
   });
 
   it('profissional alheio nao le os check-ins de pat-3', async () => {
-    // prof-2 ve pat-1 (5 check-ins) e pat-2 (1, sem equipe): 6. Nada de pat-3/pat-4.
-    assert.equal(await count(professional('prof-2'), 'SELECT count(*)::int AS total FROM check_ins'), 6);
+    // prof-2 ve pat-1 e pat-2 (este sem equipe). Nada de pat-3/pat-4.
+    assert.equal(await count(professional('prof-2'), 'SELECT count(*)::int AS total FROM check_ins'),
+      sizeOf('pat-1', 'checkIns') + sizeOf('pat-2', 'checkIns'));
     assert.equal(await count(professional('prof-2'), 'SELECT count(*)::int AS total FROM check_ins WHERE patient_id = $1', ['pat-3']), 0);
-    assert.equal(await count(professional('prof-1'), 'SELECT count(*)::int AS total FROM check_ins WHERE patient_id = $1', ['pat-3']), 1);
+    assert.equal(await count(professional('prof-1'), 'SELECT count(*)::int AS total FROM check_ins WHERE patient_id = $1', ['pat-3']), sizeOf('pat-3', 'checkIns'));
   });
 
   it('paciente nao le notas clinicas, nem as proprias', async () => {
-    // pat-1 tem 1 nota clinica no JSON de origem.
-    assert.equal(await count(admin, 'SELECT count(*)::int AS total FROM clinical_notes WHERE patient_id = $1', ['pat-1']), 1);
+    // As notas clinicas de pat-1 vem do arquivo de origem.
+    assert.equal(await count(admin, 'SELECT count(*)::int AS total FROM clinical_notes WHERE patient_id = $1', ['pat-1']), sizeOf('pat-1', 'clinicalNotes'));
     assert.equal(await count(patient('pat-1'), 'SELECT count(*)::int AS total FROM clinical_notes'), 0);
   });
 
@@ -337,7 +346,7 @@ describe('I1: o paciente nao escreve alem do que lhe cabe', () => {
   it('nao altera os proprios dados cadastrais (identidade, contato, procedimento)', async () => {
     for (const change of [
       "email = 'tomada@x.com'", "name = 'Outro Nome'", "cpf = '000.000.000-00'", "phone = '(00) 0'",
-      "procedure = 'outro'", "allergies = 'nenhuma'", "hospital = 'outro'", "surgeon_label = 'Dr. Falso'"
+      "procedure = 'outro'", "allergies = 'alergia-alterada-i1'", "hospital = 'outro'", "surgeon_label = 'Dr. Falso'"
     ]) {
       assert.ok(await blocked(patient('pat-1'), `UPDATE patients SET ${change} WHERE id = 'pat-1'`), `alterou ${change}`);
     }
