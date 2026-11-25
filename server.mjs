@@ -316,6 +316,10 @@ const api = createServer(async (request, response) => {
   if (rateLimitIp(request, response)) return;
 
   if (pathname === '/api/auth/login' && request.method === 'POST') {
+    // TEMPORARIO: medir a cadeia de proxies do Render. Remover depois da medicao.
+    if (process.env.VIVACE_LOG_FORWARDED_FOR === 'true') {
+      console.log(`PROXY-CHAIN xff=[${request.headers['x-forwarded-for'] ?? ''}] socket=[${request.socket.remoteAddress}]`);
+    }
     try {
       const input = JSON.parse(await readBody(request));
       const identifier = typeof input.username === 'string' ? input.username.trim() : '';
