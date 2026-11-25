@@ -61,8 +61,21 @@ jobs:
       - name: Provisionar o banco
         run: npm run db:provision
 
+      # Mesmos testes do `npm test`, com um relatório JUnit além da saída normal. Os
+      # reporters vêm ANTES do padrão de arquivos: depois dele o Node os trataria como
+      # argumentos dos testes.
       - name: Testes
-        run: npm test
+        run: >-
+          node --test --test-concurrency=1
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=junit --test-reporter-destination="$RUNNER_TEMP/junit.xml"
+          "test/**/*.test.mjs"
+
+      # O log do job só abre com login, mas as anotações são públicas: as falhas saem
+      # delas, para uma falha na CI poder ser lida sem abrir o log.
+      - name: Falhas dos testes como anotações
+        if: failure()
+        run: node scripts/annotate-junit.mjs "$RUNNER_TEMP/junit.xml"
 
   front:
     name: Build do front
