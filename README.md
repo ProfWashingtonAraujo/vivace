@@ -252,6 +252,20 @@ Criar, editar e apagar por chamadas próprias, com controle de versão:
 
 Em tempo real, `medication.changed` e `instruction.changed` (com `change` igual a `created`, `updated` ou `deleted`) chegam à equipe e ao paciente dono, sem o conteúdo.
 
+### Cadastro de paciente e equipe (fase 2, área 3b)
+
+| Chamada | Corpo | Resposta |
+| --- | --- | --- |
+| `POST /api/patients` | `{ name, email, password, age?, gender?, phone?, cpf?, procedure?, surgeryDate?, dischargeDate?, hospital?, avatar?, clientId?, professionalIds? }` | `201 { patient }` (`200` se o `clientId` se repetir) |
+| `PATCH /api/patients/:id` | só os campos a mudar; `If-Match: <versão>` | `200 { patient }` |
+| `DELETE /api/patients/:id` | `If-Match: <versão>` | `200 { deleted, id }` |
+| `PUT /api/patients/:id/password` | `{ password }` | `200 { id }` |
+| `PUT /api/patients/:id/care-team` | `{ professionalIds }` (**só o admin**) | `200 { careTeam }` |
+
+O servidor decide id, versão, status (`estavel`), sinais, dia de pós-operatório (dias desde `surgeryDate`, meio-dia de São Paulo) e o avatar padrão; `status`, `currentPain`, `id`, `version` e `postOpDay` enviados no corpo são ignorados. Datas são `AAAA-MM-DD`, o avatar é vazio, `https` ou uma imagem JPEG, PNG ou WebP de até 512 KB, e a senha tem de 8 a 128 caracteres. A senha no corpo do `PATCH` é ignorada: ela só muda por `PUT .../password`, que também encerra as sessões do paciente. E-mail já usado responde `409`.
+
+Quem cria entra na equipe como cirurgião (gatilho do banco). O admin cria sem equipe, ou com `professionalIds` (o primeiro é o cirurgião, os demais são equipe). `PUT .../care-team` substitui a equipe: lista vazia deixa o paciente sem equipe, e então só o admin o vê; um profissional que não existe responde `404`, e um que não é admin responde `403`. `PATCH` e `DELETE` seguem as regras de `If-Match` das medicações (`428`, `400`, `409` com o item atual).
+
 ### Administrador inicial
 
 O primeiro administrador é criado por `app_bootstrap_admin` (migração `014`), uma função `SECURITY DEFINER` chamada com o papel `vivace_api`. Ela só cria quando **não existe nenhum administrador**, de forma atômica (duas chamadas simultâneas não criam duas contas) e nunca altera uma conta existente nem a senha dela. O servidor a chama uma vez na subida e memoiza o sucesso; antes ela rodava a cada login, abrindo uma conexão de dono do banco só para perguntar se já havia admin. A conversão de uma senha antiga em texto plano para `scrypt` passa por `app_set_credential`, o mesmo caminho de escrita das senhas do `PUT`.

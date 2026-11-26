@@ -14,6 +14,7 @@ import { parseImageUpload } from './lib/image-upload.mjs';
 import { removesLastAdmin } from './lib/state-guards.mjs';
 import { validateNote, validateReview } from './lib/staff-actions.mjs';
 import { parseIfMatch, validateInstruction, validateMedication } from './lib/catalog.mjs';
+import { validateCareTeam, validatePassword, validatePatient } from './lib/patient.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
@@ -173,6 +174,7 @@ const forbidden = (request, response) => json(request, response, 403, { error: '
 const bodyLimits = {
   login: 4 * 1024,
   message: 16 * 1024,
+  patient: 1024 * 1024,
   medication: 4 * 1024,
   checkIn: 8 * 1024 * 1024,
   state: 25 * 1024 * 1024
@@ -555,6 +557,95 @@ const handleRequest = async (request, response) => {
     }
     return decoded && decoded.length <= maxShortField ? decoded : null;
   };
+
+  // Cadastro de paciente (fase 2, área 3b). Criar é POST na coleção; editar e apagar exigem a
+  // versão lida em If-Match (428 sem ela, 409 com o item atual se ela mudou). A senha e a
+  // equipe têm chamada própria, e a equipe só o admin define.
+  const patientRoute = (() => {
+    const collection = pathname === '/api/patients';
+    const item = /^\/api\/patients\/([^/]+)$/.exec(pathname);
+    const password = /^\/api\/patients\/([^/]+)\/password$/.exec(pathname);
+    const team = /^\/api\/patients\/([^/]+)\/care-team$/.exec(pathname);
+    if (collection && request.method === 'POST') return { action: 'create' };
+    if (item && request.method === 'PATCH') return { action: 'update', raw: item[1] };
+    if (item && request.method === 'DELETE') return { action: 'delete', raw: item[1] };
+    if (password && request.method === 'PUT') return { action: 'password', raw: password[1] };
+    if (team && request.method === 'PUT') return { action: 'team', raw: team[1] };
+    return null;
+  })();
+  if (patientRoute) {
+    const session = await authorize(request, response);
+    if (!session) return;
+    if (session.role === 'patient') {
+      forbidden(request, response);
+      return;
+    }
+    try {
+      const patientId = patientRoute.raw === undefined ? undefined : pathId(patientRoute.raw);
+      if (patientRoute.raw !== undefined && !patientId) {
+        json(request, response, 404, { error: 'Patient not found' });
+        return;
+      }
+      const invalid = () => json(request, response, 400, { error: 'Invalid patient data' });
+
+      if (patientRoute.action === 'create') {
+        const raw = parseJson(await readBody(request, bodyLimits.patient));
+        const input = validatePatient(raw);
+        // Só o admin informa a equipe: o profissional que cria entra nela pelo gatilho do banco.
+        const team = session.role === 'admin' && raw?.professionalIds !== undefined ? validateCareTeam(raw) : { ok: true, professionalIds: [] };
+        if (!input.ok || !team.ok) return invalid();
+        const { patient, created } = await store.createPatient(session, {
+          values: input.values, password: input.password, clientId: input.clientId, professionalIds: team.professionalIds
+        });
+        json(request, response, created ? 201 : 200, { patient });
+        if (created) publishSafely({ type: 'patient.changed', patientId: patient.id, change: 'created' });
+        return;
+      }
+
+      if (patientRoute.action === 'password') {
+        const input = validatePassword(parseJson(await readBody(request, bodyLimits.message)));
+        if (!input.ok) return invalid();
+        await store.setPatientPassword(session, { patientId, password: input.password });
+        json(request, response, 200, { id: patientId });
+        return;
+      }
+
+      if (patientRoute.action === 'team') {
+        if (session.role !== 'admin') {
+          forbidden(request, response);
+          return;
+        }
+        const input = validateCareTeam(parseJson(await readBody(request, bodyLimits.message)));
+        if (!input.ok) return invalid();
+        json(request, response, 200, await store.setCareTeam(session, { patientId, professionalIds: input.professionalIds }));
+        return;
+      }
+
+      const precondition = parseIfMatch(request.headers['if-match']);
+      if (!precondition.ok) {
+        const missing = precondition.reason === 'missing';
+        json(request, response, missing ? 428 : 400, { error: missing ? failureMessage({ statusCode: 428 }, '') : 'If-Match inválido' });
+        return;
+      }
+      if (patientRoute.action === 'update') {
+        const input = validatePatient(parseJson(await readBody(request, bodyLimits.patient)), { partial: true });
+        if (!input.ok) return invalid();
+        const { patient, changed } = await store.updatePatient(session, { patientId, values: input.values, version: precondition.version });
+        json(request, response, 200, { patient });
+        if (changed) publishSafely({ type: 'patient.changed', patientId, change: 'updated' });
+        return;
+      }
+      await store.deletePatient(session, { patientId, version: precondition.version });
+      json(request, response, 200, { deleted: true, id: patientId });
+    } catch (error) {
+      console.error('Patient API error:', error);
+      json(request, response, failureStatus(error), {
+        error: failureMessage(error, 'Could not save patient'),
+        ...(error.current ? { current: error.current } : {})
+      });
+    }
+    return;
+  }
 
   // Medicações e instruções (fase 2, área 2). Criar é POST na coleção; editar e apagar são
   // PATCH e DELETE no item e exigem a versão lida em If-Match. Uma versão que mudou

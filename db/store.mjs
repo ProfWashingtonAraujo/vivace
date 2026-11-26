@@ -4,6 +4,7 @@ import { asAdmin, createPool, withSession } from './session.mjs';
 import { exceedsDeletionLimit, idsMarkedRead } from '../lib/state-guards.mjs';
 import { brDateTime } from '../lib/br-time.mjs';
 import { reviewTimelineTitle } from '../lib/staff-actions.mjs';
+import { defaultAvatar, postOpDay } from '../lib/patient.mjs';
 
 const pool = createPool();
 
@@ -962,4 +963,146 @@ export const deleteInstruction = (session, { patientId, instructionId, version }
       throw versionConflict(current);
     }
     return { id: instructionId };
+  });
+
+// ------------------------------------------- cadastro de paciente (fase 2, area 3b)
+//
+// Criar, editar e apagar o cadastro por chamadas proprias. O servidor decide id, versao,
+// status, sinais e dia de pos-operatorio; o corpo so traz os campos do cadastro. A senha
+// e a equipe tem chamadas separadas.
+
+const conflict = (message, publicMessage) => Object.assign(new Error(message), { statusCode: 409, publicMessage });
+
+// Violacao de unicidade vira 409 com a mensagem certa; o resto segue como erro.
+const rethrowPatientError = error => {
+  if (error?.code === '23505') {
+    throw /email/i.test(`${error.constraint ?? ''} ${error.detail ?? ''}`)
+      ? conflict('Email already registered', 'E-mail já cadastrado')
+      : conflict('Patient id already used', 'Identificador já usado');
+  }
+  if (error?.code === '23503') throw notFoundOf('Professional');
+  throw error;
+};
+
+const staffOrThrow = session => {
+  if (session.role === 'patient') throw denied();
+};
+
+export const createPatient = (session, { values, password, clientId, professionalIds = [] }) =>
+  withSession(pool, session, async client => {
+    staffOrThrow(session);
+    const id = clientId ?? `pat-${randomUUID()}`;
+    const existing = await client.query('SELECT 1 FROM patients WHERE id = $1', [id]);
+    if (existing.rows.length) return { patient: await readPatient(client, id), created: false };
+
+    try {
+      await client.query(
+        `INSERT INTO patients (
+           id, name, age, gender, avatar, email, phone, cpf, procedure, surgery_date, discharge_date, hospital,
+           anesthesia_type, allergies, status, post_op_day, last_check_in_time, current_pain, current_temp,
+           blood_pressure, heart_rate, wound_review_pending, medication_adherence_percent,
+           emergency_contact_name, emergency_contact_phone, emergency_contact_relationship, position, surgeon_label)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'Não informado','{}','estavel',$13,'Aguardando primeiro check-in',0,36.5,
+                 'Não informado',0,false,100,'Não informado','','',
+                 (SELECT coalesce(max(position) + 1, 0) FROM patients),'')`,
+        [id, values.name, values.age, values.gender, values.avatar || defaultAvatar(values.name), values.email, values.phone,
+          values.cpf, values.procedure, values.surgeryDate, values.dischargeDate, values.hospital, postOpDay(values.surgeryDate)]
+      );
+      await storePassword(client, id, 'patient', password);
+      // Profissional: o gatilho app_join_team_on_create ja o colocou na equipe. Admin: a equipe
+      // que ele informou, em ordem (o primeiro e o cirurgiao); sem lista, o paciente fica sem equipe.
+      for (const [index, professionalId] of professionalIds.entries()) {
+        await client.query(
+          'INSERT INTO patient_care_team (patient_id, professional_id, role, position) VALUES ($1, $2, $3, $4)',
+          [id, professionalId, index === 0 ? 'cirurgiao' : 'equipe', index]
+        );
+      }
+    } catch (error) {
+      rethrowPatientError(error);
+    }
+    return { patient: await readPatient(client, id), created: true };
+  });
+
+const PATIENT_FIELD_COLUMNS = {
+  name: 'name', email: 'email', age: 'age', gender: 'gender', phone: 'phone', cpf: 'cpf', procedure: 'procedure',
+  hospital: 'hospital', surgeryDate: 'surgery_date', dischargeDate: 'discharge_date', avatar: 'avatar'
+};
+
+export const updatePatient = (session, { patientId, values, version }) =>
+  withSession(pool, session, async client => {
+    staffOrThrow(session);
+    const current = await client.query('SELECT name FROM patients WHERE id = $1', [patientId]);
+    if (!current.rows[0]) throw notFound();
+
+    const assignments = [];
+    const params = [patientId, version];
+    const set = (column, value) => {
+      params.push(value);
+      assignments.push(`${column} = $${params.length}`);
+    };
+    for (const [field, column] of Object.entries(PATIENT_FIELD_COLUMNS)) {
+      if (!(field in values)) continue;
+      // Avatar vazio volta ao padrao, que depende do nome (o novo, se vier junto).
+      set(column, field === 'avatar' && values.avatar === '' ? defaultAvatar(values.name ?? current.rows[0].name) : values[field]);
+    }
+    if ('surgeryDate' in values) set('post_op_day', postOpDay(values.surgeryDate));
+
+    try {
+      const updated = await client.query(
+        `UPDATE patients SET ${assignments.length ? assignments.join(', ') : 'name = name'}
+          WHERE id = $1 AND version = $2
+          RETURNING id`,
+        params
+      );
+      if (!updated.rows[0]) throw versionConflict(await readPatient(client, patientId));
+    } catch (error) {
+      if (error.statusCode) throw error;
+      rethrowPatientError(error);
+    }
+    const patient = await readPatient(client, patientId);
+    return { patient, changed: patient.version !== version };
+  });
+
+export const deletePatient = (session, { patientId, version }) =>
+  withSession(pool, session, async client => {
+    staffOrThrow(session);
+    const removed = await client.query('DELETE FROM patients WHERE id = $1 AND version = $2 RETURNING id', [patientId, version]);
+    if (!removed.rows[0]) {
+      const current = await readPatient(client, patientId);
+      if (!current) throw notFound();
+      throw versionConflict(current);
+    }
+    return { id: patientId };
+  });
+
+export const setPatientPassword = (session, { patientId, password }) =>
+  withSession(pool, session, async client => {
+    staffOrThrow(session);
+    const visible = await client.query('SELECT 1 FROM patients WHERE id = $1', [patientId]);
+    if (!visible.rows.length) throw notFound();
+    await storePassword(client, patientId, 'patient', password);
+    // Quem estava logado com a senha antiga sai: trocar a senha encerra as sessoes do paciente.
+    await client.query("DELETE FROM sessions WHERE role = 'patient' AND user_id = $1", [patientId]);
+    return { id: patientId };
+  });
+
+// So o admin define a equipe. A lista substitui a atual; o primeiro e o cirurgiao e os demais
+// sao equipe. Lista vazia deixa o paciente sem equipe (so o admin o ve).
+export const setCareTeam = (session, { patientId, professionalIds }) =>
+  withSession(pool, session, async client => {
+    if (session.role !== 'admin') throw denied();
+    const patient = await client.query('SELECT 1 FROM patients WHERE id = $1', [patientId]);
+    if (!patient.rows.length) throw notFound();
+    if (professionalIds.length) {
+      const found = await client.query('SELECT id FROM professionals WHERE id = ANY($1::text[])', [professionalIds]);
+      if (found.rows.length !== professionalIds.length) throw notFoundOf('Professional');
+    }
+    await client.query('DELETE FROM patient_care_team WHERE patient_id = $1', [patientId]);
+    for (const [index, professionalId] of professionalIds.entries()) {
+      await client.query(
+        'INSERT INTO patient_care_team (patient_id, professional_id, role, position) VALUES ($1, $2, $3, $4)',
+        [patientId, professionalId, index === 0 ? 'cirurgiao' : 'equipe', index]
+      );
+    }
+    return { careTeam: professionalIds.map((professionalId, index) => ({ professionalId, role: index === 0 ? 'cirurgiao' : 'equipe' })) };
   });

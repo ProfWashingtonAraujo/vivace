@@ -186,3 +186,23 @@ describe('area 2: as rotas de medicacoes e instrucoes exigem autenticacao', () =
     assert.equal((await send('POST', '/api/patients/pat-1/medications/x')).status, 404);
   });
 });
+
+describe('area 3b: as rotas de cadastro de paciente exigem autenticacao', () => {
+  const send = (method, path, headers = {}) => fetch(`${base}${path}`, {
+    method, headers: { 'Content-Type': 'application/json', ...headers }, body: ['GET', 'DELETE'].includes(method) ? undefined : '{}'
+  });
+
+  it('criar, editar, apagar, trocar senha e definir equipe sem token respondem 401', async () => {
+    assert.equal((await send('POST', '/api/patients')).status, 401);
+    assert.equal((await send('PATCH', '/api/patients/pat-1', { 'If-Match': '1' })).status, 401);
+    assert.equal((await send('DELETE', '/api/patients/pat-1', { 'If-Match': '1' })).status, 401);
+    assert.equal((await send('PUT', '/api/patients/pat-1/password')).status, 401);
+    assert.equal((await send('PUT', '/api/patients/pat-1/care-team')).status, 401);
+  });
+
+  it('metodos que nao existem caem em 404', async () => {
+    assert.equal((await send('GET', '/api/patients')).status, 404);
+    assert.equal((await send('PUT', '/api/patients/pat-1')).status, 404);
+    assert.equal((await send('POST', '/api/patients/pat-1/password')).status, 404);
+  });
+});
