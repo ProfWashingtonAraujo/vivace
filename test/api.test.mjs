@@ -68,6 +68,11 @@ const startServer = async (env = {}) => {
       // Os testes simulam IPs pelo X-Forwarded-For, o que so vale com um proxy
       // confiavel na frente, como no Render. Sem isso o cabecalho e ignorado.
       VIVACE_TRUST_PROXY_HOPS: '1',
+      // A suite faz centenas de requisicoes (cada teste entra de novo), bem acima do teto
+      // padrao de 300 por minuto por IP e 120 por sessao. Os testes do proprio limite sobem
+      // servidores a parte com valores explicitos, que vencem estes.
+      VIVACE_RATE_IP_MAX: '100000',
+      VIVACE_RATE_SESSION_MAX: '100000',
       ...env
     }
   });
