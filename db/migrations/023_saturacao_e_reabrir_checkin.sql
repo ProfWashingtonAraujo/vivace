@@ -1,3 +1,9 @@
+-- Trava as duas tabelas ja de saida e na mesma ordem em que o app as le (patients, depois
+-- check_ins). Sem isso, o ALTER travava check_ins e depois patients, enquanto uma leitura do
+-- app com o servidor antigo ainda no ar segurava patients e esperava check_ins: deadlock.
+SET LOCAL lock_timeout = '15s';
+LOCK TABLE patients, check_ins IN ACCESS EXCLUSIVE MODE;
+
 -- Saturacao de oxigenio (SpO2) no check-in, e a equipe poder reabrir o check-in do dia.
 --
 -- spo2 e opcional: nem todo paciente tem oximetro. Fica no check-in (historico) e em
