@@ -1105,3 +1105,210 @@ describe('Fase 0: o PUT recusa apagar varios pacientes de uma vez', () => {
     assert.equal((await staffState(staff)).patients.length, state.patients.length);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fase 2, area 1: notas clinicas, avaliacao de foto e remetente das mensagens.
+// O servidor decide autor, data, revisor e linha do tempo; o cliente so manda a
+// intencao (o texto da nota, o veredito e o comentario).
+
+const ensureOutsider = async () => {
+  // Helena (prof-9) nao esta na equipe de ninguem: so enxerga o paciente sem equipe (pat-2).
+  const admin = (await login('admin@vivace.med.br')).token;
+  const full = await staffState(admin);
+  if (full.professionals.some(professional => professional.id === 'prof-9')) return;
+  const professionals = [
+    ...full.professionals,
+    { id: 'prof-9', name: 'Helena Duarte', role: 'Cirurgia Plastica', crmCoren: 'CRM-SP 222.111', avatar: '', email: 'helena@vivace.med.br', specialty: 'Cirurgia Plastica', password: 'vivace-demo' }
+  ];
+  assert.equal((await call('/api/state', { method: 'PUT', token: admin, body: { ...full, professionals } })).status, 200);
+};
+
+const postNote = (token, patientId, body) =>
+  call(`/api/patients/${patientId}/clinical-notes`, { method: 'POST', token, body });
+
+const putReview = (token, patientId, photoId, body) =>
+  call(`/api/patients/${patientId}/wound-photos/${photoId}/review`, { method: 'PUT', token, body });
+
+// O paciente envia uma foto de verdade (pelo check-in) e devolve o id dela.
+const patientSendsPhoto = async () => {
+  const sent = await call('/api/checkins', {
+    method: 'POST', token: (await login('mariana')).token, body: checkInBody(tinyJpeg)
+  });
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  return sent.body.patient.woundPhotos[0].id;
+};
+
+describe('Fase 2 / area 1: notas clinicas', () => {
+  before(ensureOutsider);
+
+  it('a equipe cria a nota; autor, data e id vem do servidor, nao do cliente', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const sent = await postNote(staff, 'pat-1', {
+      text: 'Paciente evoluindo bem', author: 'Dra. Falsa', date: '01/01/2000 00:00', id: 'cn-forjado'
+    });
+    assert.equal(sent.status, 201, JSON.stringify(sent.body));
+    const { note } = sent.body;
+    assert.equal(note.author, 'Rafaely Carvalho');
+    assert.match(note.date, /^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/);
+    assert.notEqual(note.date, '01/01/2000 00:00');
+    assert.notEqual(note.id, 'cn-forjado');
+    assert.equal(note.text, 'Paciente evoluindo bem');
+
+    const notes = patientOf(await staffState(staff), 'pat-1').clinicalNotes;
+    assert.equal(notes[0].id, note.id, 'a nota nova deve ser a primeira');
+    assert.equal(notes[0].author, 'Rafaely Carvalho');
+  });
+
+  it('repetir o mesmo clientId nao duplica a nota', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const body = { text: 'nota idempotente area1', clientId: 'cn-cliente-area1' };
+    const first = await postNote(staff, 'pat-1', body);
+    const second = await postNote(staff, 'pat-1', body);
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 200);
+    assert.equal(second.body.note.id, first.body.note.id);
+    const copies = patientOf(await staffState(staff), 'pat-1').clinicalNotes.filter(note => note.text === 'nota idempotente area1');
+    assert.equal(copies.length, 1);
+  });
+
+  it('o paciente nao cria nota (403) e nao ve as notas da equipe', async () => {
+    const patientToken = (await login('mariana')).token;
+    assert.equal((await postNote(patientToken, 'pat-1', { text: 'tentativa' })).status, 403);
+    assert.deepEqual(patientOf(await staffState(patientToken), 'pat-1').clinicalNotes, []);
+  });
+
+  it('profissional fora da equipe nao escreve em paciente que nao ve', async () => {
+    const outsider = (await login('Helena Duarte')).token;
+    const result = await postNote(outsider, 'pat-1', { text: 'intruso' });
+    assert.equal(result.status, 404);
+    const notes = patientOf(await staffState((await login('Rafaely Carvalho')).token), 'pat-1').clinicalNotes;
+    assert.ok(!notes.some(note => note.text === 'intruso'));
+  });
+
+  it('paciente inexistente responde 404', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    assert.equal((await postNote(staff, 'pat-que-nao-existe', { text: 'x' })).status, 404);
+  });
+
+  it('texto vazio, so espacos ou grande demais respondem 400', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    for (const text of ['', '   ', 'x'.repeat(2_001), 42, undefined]) {
+      assert.equal((await postNote(staff, 'pat-1', { text })).status, 400, `texto ${JSON.stringify(text)?.slice(0, 20)}`);
+    }
+  });
+
+  it('o evento da nota chega a equipe, nunca ao paciente, e nao carrega o texto', async () => {
+    const staffStream = await openStream((await login('Rafaely Carvalho')).token);
+    const patientStream = await openStream((await login('mariana')).token);
+    try {
+      const sent = await postNote((await login('Rafaely Carvalho')).token, 'pat-1', { text: 'segredo clinico area1' });
+      assert.equal(sent.status, 201);
+      assert.ok(await waitFor(() => staffStream.events.some(event => event.type === 'clinical-note.created')), 'a equipe nao recebeu');
+      await new Promise(resolve => setTimeout(resolve, 1_000));
+      assert.deepEqual(patientStream.events.filter(event => event.type === 'clinical-note.created'), [], 'o paciente recebeu o evento da nota');
+      const event = staffStream.events.find(item => item.type === 'clinical-note.created');
+      assert.ok(!JSON.stringify(event).includes('segredo clinico'), 'o evento carrega o texto da nota');
+    } finally {
+      staffStream.close();
+      patientStream.close();
+    }
+  });
+});
+
+describe('Fase 2 / area 1: avaliacao de foto da ferida', () => {
+  before(ensureOutsider);
+
+  it('a equipe avalia; revisor, data e linha do tempo vem do servidor', async () => {
+    const photoId = await patientSendsPhoto();
+    const staff = (await login('Rafaely Carvalho')).token;
+    const reviewed = await putReview(staff, 'pat-1', photoId, {
+      status: 'avaliado_adequado', feedback: 'Boa cicatrizacao', reviewedBy: 'Dr. Falso', reviewedAt: '01/01/2000 as 00:00'
+    });
+    assert.equal(reviewed.status, 200, JSON.stringify(reviewed.body));
+    assert.equal(reviewed.body.photo.reviewStatus, 'avaliado_adequado');
+    assert.equal(reviewed.body.photo.reviewedBy, 'Rafaely Carvalho');
+    assert.match(reviewed.body.photo.reviewedAt, /^\d{2}\/\d{2}\/\d{4} às \d{2}:\d{2}$/);
+
+    const patient = patientOf(await staffState(staff), 'pat-1');
+    const photo = patient.woundPhotos.find(item => item.id === photoId);
+    assert.equal(photo.reviewStatus, 'avaliado_adequado');
+    assert.equal(photo.reviewFeedback, 'Boa cicatrizacao');
+    assert.equal(photo.reviewedBy, 'Rafaely Carvalho');
+
+    const last = patient.timeline.at(-1);
+    assert.equal(last.title, 'Cicatrização aprovada');
+    assert.equal(last.author, 'Rafaely Carvalho');
+    assert.equal(last.type, 'curativo');
+    assert.equal(last.description, 'Boa cicatrizacao');
+
+    const stillPending = patient.woundPhotos.some(item => !item.imageUrl.includes('images.unsplash.com') && item.reviewStatus === 'pendente');
+    assert.equal(patient.woundReviewPending, stillPending, 'a marca de revisao pendente nao bate com as fotos');
+    assert.equal(reviewed.body.woundReviewPending, stillPending);
+  });
+
+  it('o veredito "requer atencao" gera o titulo correspondente', async () => {
+    const photoId = await patientSendsPhoto();
+    const staff = (await login('Rafaely Carvalho')).token;
+    assert.equal((await putReview(staff, 'pat-1', photoId, { status: 'requer_atencao', feedback: 'Vermelhidao' })).status, 200);
+    const last = patientOf(await staffState(staff), 'pat-1').timeline.at(-1);
+    assert.equal(last.title, 'Ferida requer atenção');
+  });
+
+  it('status invalido responde 400 e nada muda', async () => {
+    const photoId = await patientSendsPhoto();
+    const staff = (await login('Rafaely Carvalho')).token;
+    for (const status of ['pendente', 'aprovada', '', undefined, 7]) {
+      assert.equal((await putReview(staff, 'pat-1', photoId, { status, feedback: 'x' })).status, 400, `status ${JSON.stringify(status)}`);
+    }
+    const photo = patientOf(await staffState(staff), 'pat-1').woundPhotos.find(item => item.id === photoId);
+    assert.equal(photo.reviewStatus, 'pendente');
+  });
+
+  it('comentario acima de 1000 caracteres responde 400', async () => {
+    const photoId = await patientSendsPhoto();
+    const staff = (await login('Rafaely Carvalho')).token;
+    assert.equal((await putReview(staff, 'pat-1', photoId, { status: 'avaliado_adequado', feedback: 'x'.repeat(1_001) })).status, 400);
+  });
+
+  it('o paciente nao avalia a propria foto (403)', async () => {
+    const photoId = await patientSendsPhoto();
+    const patientToken = (await login('mariana')).token;
+    assert.equal((await putReview(patientToken, 'pat-1', photoId, { status: 'avaliado_adequado', feedback: 'ok' })).status, 403);
+  });
+
+  it('foto inexistente e paciente fora da equipe respondem 404', async () => {
+    const photoId = await patientSendsPhoto();
+    const staff = (await login('Rafaely Carvalho')).token;
+    assert.equal((await putReview(staff, 'pat-1', 'wp-que-nao-existe', { status: 'avaliado_adequado', feedback: 'x' })).status, 404);
+    assert.equal((await putReview((await login('Helena Duarte')).token, 'pat-1', photoId, { status: 'avaliado_adequado', feedback: 'x' })).status, 404);
+  });
+
+  it('o paciente dono recebe o aviso da avaliacao, mas sem o texto do comentario', async () => {
+    const photoId = await patientSendsPhoto();
+    const patientStream = await openStream((await login('mariana')).token);
+    try {
+      const staff = (await login('Rafaely Carvalho')).token;
+      assert.equal((await putReview(staff, 'pat-1', photoId, { status: 'avaliado_adequado', feedback: 'comentario reservado' })).status, 200);
+      assert.ok(await waitFor(() => patientStream.events.some(event => event.type === 'wound-photo.reviewed')), 'o paciente nao recebeu o aviso');
+      const event = patientStream.events.find(item => item.type === 'wound-photo.reviewed');
+      assert.equal(event.photoId, photoId);
+      assert.ok(!JSON.stringify(event).includes('comentario reservado'), 'o evento carrega o comentario');
+    } finally {
+      patientStream.close();
+    }
+  });
+});
+
+describe('Fase 2 / area 1: remetente das mensagens da equipe', () => {
+  it('a mensagem da equipe leva o nome da sessao, mesmo que o cliente mande outro', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const sent = await call('/api/messages', {
+      method: 'POST', token: staff,
+      body: { patientId: 'pat-1', text: 'ola, tudo bem?', senderName: 'Dra. Falsa', clientMessageId: 'msg-area1-remetente' }
+    });
+    assert.equal(sent.status, 201, JSON.stringify(sent.body));
+    const message = patientOf(await staffState(staff), 'pat-1').messages.find(item => item.id === 'msg-area1-remetente');
+    assert.equal(message.sender, 'equipe');
+    assert.equal(message.senderName, 'Rafaely Carvalho');
+  });
+});
