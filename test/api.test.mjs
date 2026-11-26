@@ -544,6 +544,17 @@ describe('origem e limite de requisicoes', () => {
     }
   });
 
+  it('o preflight libera PATCH e If-Match, que as edicoes do front usam de outra origem', async () => {
+    const response = await fetch(`${base}/api/professionals/prof-1`, {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:3000', 'Access-Control-Request-Method': 'PATCH', 'Access-Control-Request-Headers': 'authorization,content-type,if-match' }
+    });
+    const methods = (response.headers.get('access-control-allow-methods') ?? '').split(/\s*,\s*/);
+    const headers = (response.headers.get('access-control-allow-headers') ?? '').toLowerCase().split(/\s*,\s*/);
+    assert.ok(methods.includes('PATCH'), `PATCH fora dos metodos: ${methods}`);
+    for (const name of ['authorization', 'content-type', 'if-match']) assert.ok(headers.includes(name), `${name} fora dos cabecalhos: ${headers}`);
+  });
+
   it('VIVACE_ALLOWED_ORIGINS libera uma origem fora do padrao', async () => {
     const at = 'http://127.0.0.1:3196';
     const pid = await startServer({ VIVACE_API_PORT: '3196', VIVACE_ALLOWED_ORIGINS: 'https://app.exemplo.med.br' });
