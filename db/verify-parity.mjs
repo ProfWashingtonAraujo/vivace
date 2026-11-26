@@ -14,8 +14,10 @@ const maxReported = 25;
 
 // O hash de senha nunca volta na API (server.mjs remove antes de responder), e
 // no banco vira password_hash. Nao e divergencia: e proposital.
+// `password` vai para account_credentials e `careTeam` para patient_care_team: nenhum dos
+// dois faz parte do agregado do paciente que a API devolve.
 const stripPasswords = patient => {
-  const { password, ...rest } = patient;
+  const { password, careTeam, ...rest } = patient;
   return rest;
 };
 

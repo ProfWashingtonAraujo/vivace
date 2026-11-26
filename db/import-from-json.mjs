@@ -136,9 +136,25 @@ const insertCollections = async (client, state, warnings) => {
          ON CONFLICT (patient_id, professional_id) DO UPDATE SET role = 'cirurgiao', position = 0`,
         [patient.id, surgeon.id]
       );
-    } else if (patient.surgeon) {
+    } else if (patient.surgeon && !(patient.careTeam ?? []).length) {
       orphanSurgeons += 1;
       warnings.push(`${patient.id}: cirurgiao "${patient.surgeon}" nao existe em professionals; equipe ficou vazia`);
+    }
+
+    // Equipe explicita: `careTeam` lista ids de profissionais que acompanham o paciente sem
+    // serem o cirurgiao (papel `equipe`). Serve para dar acesso a um paciente cujo
+    // cirurgiao responsavel nao tem cadastro: sem ninguem na equipe, so o admin o ve.
+    for (const [teamIndex, professionalId] of (patient.careTeam ?? []).entries()) {
+      if (!professionals.some(professional => professional.id === professionalId)) {
+        warnings.push(`${patient.id}: careTeam cita ${professionalId}, que nao existe em professionals`);
+        continue;
+      }
+      await client.query(
+        `INSERT INTO patient_care_team (patient_id, professional_id, role, position)
+         VALUES ($1, $2, 'equipe', $3)
+         ON CONFLICT (patient_id, professional_id) DO NOTHING`,
+        [patient.id, professionalId, teamIndex + 1]
+      );
     }
 
     for (const [index, event] of (patient.timeline ?? []).entries()) {

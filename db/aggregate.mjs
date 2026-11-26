@@ -2,6 +2,8 @@
 // A ordem de cada colecao vem de `position`, que guarda o indice do array no
 // JSON, porque o frontend depende dela (checkIns[0] e "hoje", medications.slice(0,2)).
 
+import { displayedSurgeon } from '../lib/surgeon.mjs';
+
 const ordered = rows => [...rows].sort((a, b) => a.position - b.position);
 
 const groupByPatient = rows => {
@@ -167,10 +169,9 @@ const readPatients = async (client, patientId = null) => {
 
   return patientRows.rows.map(row => {
     const team = teamByPatient.get(row.id) ?? [];
-    const primary = team.find(member => member.role === 'cirurgiao') ?? team[0];
-    // O nome vem da equipe (assim renomear o profissional atualiza a tela, como
-    // hoje) e cai no rotulo guardado quando o paciente nao tem equipe.
-    const surgeon = primary ? `${primary.name} (${primary.crm_coren})` : row.surgeon_label;
+    // O nome vem da equipe (assim renomear o profissional atualiza a tela) e cai no rotulo
+    // guardado quando nao ha cirurgiao na equipe (veja lib/surgeon.mjs).
+    const surgeon = displayedSurgeon(team, row.surgeon_label);
     return buildPatient(row, {
       timeline: byPatient.timeline.get(row.id) ?? [],
       photos: byPatient.photos.get(row.id) ?? [],

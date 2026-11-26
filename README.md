@@ -68,7 +68,7 @@ Sem esses GUCs, `app_role_name()` devolve `NULL` e tudo nega: falha fechada. Um 
 
 A filtragem não está mais no JavaScript. `GET /api/state` consulta tudo e devolve o que o RLS deixou passar, e as policies espelham o comportamento antigo, inclusive dois pontos que parecem contraditórios:
 
-- Profissional sem equipe vê o paciente. Enquanto o paciente não tem cirurgião atribuído, qualquer profissional vê, que é o que `canAccessPatient` fazia em JS.
+- Profissional só vê o paciente de cuja equipe faz parte. Um paciente **sem equipe** só é visível ao admin (e ao próprio paciente); antes da migração `018`, qualquer profissional o via (veja "Visibilidade e equipe do paciente").
 - Paciente não vê nota clínica, nem a própria. `/api/checkins` devolvia o paciente inteiro com `clinicalNotes` para quem tem papel de paciente; agora a linha simplesmente não aparece.
 
 O `PUT /api/state` ficou mais simples do que a versão em JS. O corpo chega inteiro e cada coleção é reescrita na ordem do array, apagando o que não veio. O que protege um profissional de apagar o prontuário dos colegas é o RLS: apagar uma linha invisível simplesmente não apaga nada. Antes isso exigia reinserir na mão a lista de pacientes proibidos (`rejectForeignPatients`).
@@ -91,7 +91,7 @@ As tabelas filhas do paciente (linha do tempo, fotos, medicações, horários, d
 
 Uma policy não enxerga a linha antiga, então o limite por coluna é um gatilho (`app_guard_patient_columns`) que compara a linha inteira em `jsonb`: uma coluna nova no futuro já nasce protegida. Os sinais do check-in e a aderência continuam graváveis pelo paciente porque o servidor os calcula a partir do que ele envia.
 
-**Equipe do paciente.** Um profissional só remove a si mesmo da equipe, e só se ela continua com mais alguém (`app_keep_care_team`); esvaziar uma equipe é decisão do admin. Isso importa porque um paciente sem equipe fica visível a todos os profissionais (a regra atual, usada pelo `pat-2` da demonstração). Essa própria regra continua em vigor: um paciente que **já** não tem equipe segue visível a qualquer profissional, e quem o vê pode redefinir a senha dele pelo `PUT`.
+**Equipe do paciente.** Um profissional só remove a si mesmo da equipe, e só se ela continua com mais alguém (`app_keep_care_team`); esvaziar uma equipe é decisão do admin. A regra de visibilidade que tornava isso grave (paciente sem equipe visível a todos) foi trocada na migração `018`: veja a seção abaixo.
 
 ### Quatro armadilhas que custaram tempo
 
@@ -173,7 +173,7 @@ Toda rota exige um token de sessão (`Authorization: Bearer <token>`), emitido p
 | `GET /api/state` | todos os pacientes | apenas o próprio registro, sem notas clínicas |
 | `PUT /api/state` | permitido | `403` |
 | `POST /api/messages` | envia como `equipe` | envia como `paciente`, apenas para si mesmo |
-| `GET /api/events` | eventos dos pacientes da equipe e dos sem equipe (mesma regra do RLS) | apenas os próprios eventos |
+| `GET /api/events` | eventos dos pacientes da equipe (mesma regra do RLS) | apenas os próprios eventos |
 
 O remetente da mensagem é definido pelo servidor conforme o papel do token, então um paciente não consegue se passar pela equipe. O CORS só responde à própria origem do frontend.
 
@@ -208,6 +208,16 @@ Medicações e instruções continuam sendo apagadas pelo `PUT` (há tela para i
 ### Integração contínua
 
 `.github/workflows/ci.yml` roda em cada push com um Postgres 18 como serviço: gera um estado de teste com administrador (`scripts/make-test-state.mjs`, que exige um caminho de saída e nunca sobrescreve `.data/`), provisiona o banco pelo mesmo `npm run db:provision` do Render e executa `npm test`, o que inclui os testes de API e de RLS que precisam de banco. Um segundo job compila o front em modo de desenvolvimento e o build de produção da Vercel, que falha se a CSP não liberar a URL da API.
+
+### Visibilidade e equipe do paciente (fase 2, área 3, parte I9)
+
+Antes da migração `018` a regra era "profissional da equipe **ou** paciente sem equipe": enquanto um paciente não tinha ninguém atribuído, qualquer profissional o via e podia, por exemplo, redefinir a senha dele. Era uma regra que falhava aberta: tirar a última pessoa da equipe, ou criar um paciente sem equipe, abria o prontuário a todos. Agora:
+
+- **O profissional só vê o paciente de cuja equipe faz parte.** Paciente sem equipe só é visível ao admin e ao próprio paciente. O mesmo vale para o stream de eventos.
+- **Quem cria um paciente entra na equipe dele** como cirurgião, por um gatilho no próprio `INSERT` (`app_join_team_on_create`). Sem isso o criador não veria o que acabou de criar, e a criação pela tela atual (`PUT /api/state`) quebraria. O gatilho só dispara na criação e usa o usuário da sessão, nunca um id vindo de fora: **ninguém consegue "assumir" um paciente que ficou sem equipe** (a policy de `patient_care_team` continua exigindo acesso ao paciente).
+- **O admin cria sem equipe** e atribui depois; criar como admin não coloca ninguém na equipe.
+- **Os dados existentes:** quem estava sem equipe na hora da migração ganhou uma equipe explícita, com todos os profissionais cadastrados (papel `equipe`), para ninguém perder acesso por causa da mudança. Na demonstração, que tem um profissional, o `pat-2` passou a ter o `prof-1` na equipe, e o cirurgião que aparece na tela continua o do rótulo (`Dr. Marcos Albuquerque`): só quem tem papel `cirurgiao` substitui o rótulo guardado (`lib/surgeon.mjs`).
+- **Semente e import:** `db/seed/demo-state.json` traz `careTeam: ["prof-1"]` no `pat-2`, e o import aceita `careTeam` (lista de ids, papel `equipe`) para dar equipe a um paciente cujo cirurgião responsável não tem cadastro. Se o seu `.data/vivace-state.json` local tiver um paciente nesse caso, acrescente `careTeam`, ou ele ficará visível só ao admin.
 
 ### Ações da equipe (fase 2, área 1)
 

@@ -77,12 +77,12 @@ export const findAccount = async identifier => {
 };
 
 // Quem pode receber eventos de um paciente no stream (SSE), pela mesma regra de
-// app_can_access_patient: a equipe do paciente, ou qualquer profissional enquanto
-// ele não tem equipe. Contexto admin porque patient_care_team tem RLS e um
+// app_can_access_patient: a equipe do paciente (e o admin). Paciente sem equipe não
+// tem profissional com acesso. Contexto admin porque patient_care_team tem RLS e um
 // profissional só veria as próprias linhas.
 export const patientAudience = patientId => asAdmin(pool, async client => {
   const { rows } = await client.query('SELECT professional_id FROM patient_care_team WHERE patient_id = $1', [patientId]);
-  return { everyone: rows.length === 0, professionalIds: rows.map(row => row.professional_id) };
+  return { professionalIds: rows.map(row => row.professional_id) };
 });
 
 // Cria o primeiro administrador quando ainda não existe nenhum. É app_bootstrap_admin
