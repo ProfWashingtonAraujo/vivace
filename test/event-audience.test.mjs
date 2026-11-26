@@ -4,7 +4,7 @@ import { shouldDeliver } from '../lib/event-audience.mjs';
 
 const event = { type: 'message.created', patientId: 'pat-1' };
 const team = { everyone: false, professionalIds: ['prof-1'] };
-const noTeam = { everyone: true, professionalIds: [] };
+const noTeam = { professionalIds: [] };
 
 describe('shouldDeliver', () => {
   it('o proprio paciente recebe', () => {
@@ -23,8 +23,14 @@ describe('shouldDeliver', () => {
     assert.equal(shouldDeliver({ role: 'professional', userId: 'prof-9' }, event, team), false);
   });
 
-  it('paciente sem equipe e visivel a qualquer profissional, como no RLS', () => {
-    assert.equal(shouldDeliver({ role: 'professional', userId: 'prof-9' }, event, noTeam), true);
+  it('paciente sem equipe nao e visivel a profissional algum; so o admin recebe, como no RLS', () => {
+    assert.equal(shouldDeliver({ role: 'professional', userId: 'prof-9' }, event, noTeam), false);
+    assert.equal(shouldDeliver({ role: 'admin', userId: 'adm-1' }, event, noTeam), true);
+  });
+
+  it('o campo `everyone` da regra antiga deixa de valer', () => {
+    // Antes, `everyone: true` abria o evento a todo profissional. Nao abre mais.
+    assert.equal(shouldDeliver({ role: 'professional', userId: 'prof-9' }, event, { everyone: true, professionalIds: [] }), false);
   });
 
   it('admin recebe tudo', () => {

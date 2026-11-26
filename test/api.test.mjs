@@ -203,9 +203,9 @@ describe('PUT /api/state', () => {
 
     const outsider = await login('Helena Duarte', 'vivace-demo');
     const visible = (await call('/api/state', { token: outsider.token })).body.patients.map(p => p.id);
-    // prof-9 nao esta na equipe de ninguem, entao so enxerga o paciente sem
-    // cirurgiao atribuido. pat-1, pat-3 e pat-4 tem equipe (prof-1).
-    assert.deepEqual(visible, ['pat-2']);
+    // prof-9 nao esta na equipe de ninguem, entao nao enxerga paciente algum:
+    // todos tem equipe (prof-1), e paciente sem equipe so o admin ve.
+    assert.deepEqual(visible, []);
 
     const partial = (await call('/api/state', { token: outsider.token })).body;
     assert.equal((await call('/api/state', { method: 'PUT', token: outsider.token, body: partial })).status, 200);
@@ -774,11 +774,14 @@ describe('C1: o stream de eventos respeita a equipe do paciente', () => {
     assert.deepEqual(outsider.events.filter(event => event.patientId === 'pat-1'), [], 'profissional fora da equipe recebeu evento de pat-1');
   });
 
-  it('paciente sem equipe continua visivel a qualquer profissional', async () => {
+  it('pat-2 tem equipe explicita: o profissional da equipe recebe e quem esta fora nao', async () => {
+    const teamMember = await open((await login('Rafaely Carvalho')).token);
     const outsider = await open((await login('Helena Duarte')).token);
-    const sent = await postMessage((await login('carlos')).token, 'pat-2', 'sem equipe (c1)');
+    const sent = await postMessage((await login('carlos')).token, 'pat-2', 'equipe explicita (c1)');
     assert.equal(sent.status, 201);
-    assert.ok(await waitFor(() => outsider.events.some(event => event.patientId === 'pat-2')), 'pat-2 nao tem equipe e devia chegar');
+    assert.ok(await waitFor(() => teamMember.events.some(event => event.patientId === 'pat-2')), 'a equipe de pat-2 deveria receber');
+    await new Promise(resolve => setTimeout(resolve, 1_000));
+    assert.deepEqual(outsider.events.filter(event => event.patientId === 'pat-2'), [], 'quem esta fora da equipe recebeu o evento de pat-2');
   });
 
   it('o evento de check-in tambem nao vaza para fora da equipe', async () => {
@@ -1583,5 +1586,63 @@ describe('Fase 2 / area 2: instrucoes de pos-operatorio', () => {
     assert.equal((await deleteItem('instructions', staff, 'pat-1', instruction.id, 2)).status, 200);
     assert.equal(await instructionOf(staff, 'pat-1', instruction.id), undefined);
     assert.equal((await deleteItem('instructions', staff, 'pat-1', 'inst-que-nao-existe', 1)).status, 404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// I9 pelo caminho atual da tela (PUT /api/state): criar um paciente continua
+// funcionando, e a visibilidade e fail-closed.
+
+const clonedPatient = (state, over) => ({
+  ...patientOf(state, 'pat-1'),
+  timeline: [], woundPhotos: [], medications: [], checkIns: [], messages: [], instructions: [], clinicalNotes: [],
+  ...over
+});
+
+describe('I9 / area 3: visibilidade fail-closed pelo PUT', () => {
+  before(ensureOutsider);
+
+  it('o profissional que cria um paciente pelo PUT entra na equipe; quem esta fora nao o ve', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const state = await staffState(staff);
+    const created = clonedPatient(state, {
+      id: 'pat-i9-prof', name: 'Criado Por Profissional', email: 'criado.prof.i9@email.com',
+      password: 'vivace-demo', surgeon: 'Fulano Desconhecido (CRM-XX 1)'
+    });
+    const saved = await call('/api/state', { method: 'PUT', token: staff, body: { ...state, patients: [...state.patients, created] } });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+
+    const ids = async token => (await staffState(token)).patients.map(patient => patient.id);
+    assert.ok((await ids(staff)).includes('pat-i9-prof'), 'o criador deixou de ver o paciente que acabou de criar');
+    assert.ok(!(await ids((await login('Helena Duarte')).token)).includes('pat-i9-prof'), 'um profissional fora da equipe ve o paciente');
+    assert.ok((await ids((await login('admin@vivace.med.br')).token)).includes('pat-i9-prof'));
+  });
+
+  it('um paciente criado pelo admin sem cirurgiao conhecido fica visivel so ao admin', async () => {
+    const admin = (await login('admin@vivace.med.br')).token;
+    const state = await staffState(admin);
+    const created = clonedPatient(state, {
+      id: 'pat-i9-admin', name: 'Criado Pelo Admin', email: 'criado.admin.i9@email.com',
+      password: 'vivace-demo', surgeon: 'Outro Desconhecido (CRM-XX 2)'
+    });
+    const saved = await call('/api/state', { method: 'PUT', token: admin, body: { ...state, patients: [...state.patients, created] } });
+    assert.equal(saved.status, 200, JSON.stringify(saved.body));
+
+    const ids = async token => (await staffState(token)).patients.map(patient => patient.id);
+    assert.ok((await ids(admin)).includes('pat-i9-admin'));
+    assert.ok(!(await ids((await login('Rafaely Carvalho')).token)).includes('pat-i9-admin'), 'a equipe ve um paciente que ninguem lhe atribuiu');
+    assert.ok(!(await ids((await login('Helena Duarte')).token)).includes('pat-i9-admin'));
+  });
+
+  it('um paciente criado com cirurgiao conhecido continua indo para a equipe dele', async () => {
+    const admin = (await login('admin@vivace.med.br')).token;
+    const state = await staffState(admin);
+    const created = clonedPatient(state, {
+      id: 'pat-i9-label', name: 'Com Cirurgiao Conhecido', email: 'com.cirurgiao.i9@email.com',
+      password: 'vivace-demo', surgeon: 'Rafaely Carvalho (CRM-SP 148.920)'
+    });
+    assert.equal((await call('/api/state', { method: 'PUT', token: admin, body: { ...state, patients: [...state.patients, created] } })).status, 200);
+    const visible = (await staffState((await login('Rafaely Carvalho')).token)).patients.map(patient => patient.id);
+    assert.ok(visible.includes('pat-i9-label'));
   });
 });

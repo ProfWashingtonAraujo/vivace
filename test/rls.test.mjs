@@ -81,17 +81,15 @@ describe('visibilidade por papel', () => {
     assert.deepEqual(rows.map(row => row.id), ['pat-1']);
   });
 
-  it('profissional da equipe ve os 3 pacientes sob sua responsabilidad e o orfao', async () => {
+  it('profissional da equipe ve os 4 pacientes: todos tem o prof-1 na equipe (pat-2 por equipe explicita)', async () => {
     const rows = (await run(professional('prof-1'), 'SELECT id FROM patients ORDER BY id')).rows;
-    // pat-1, pat-3, pat-4 estao na equipe do prof-1; pat-2 nao tem equipe e
-    // segue visivel, como antes das policies.
     assert.deepEqual(rows.map(row => row.id), ['pat-1', 'pat-2', 'pat-3', 'pat-4']);
   });
 
   it('profissional de outro hospital nao ve os pacientes alheios', async () => {
     const rows = (await run(professional('prof-2'), 'SELECT id FROM patients ORDER BY id')).rows;
-    // pat-1 esta na equipe dele; pat-2 segue visivel por nao ter equipe.
-    assert.deepEqual(rows.map(row => row.id), ['pat-1', 'pat-2']);
+    // So pat-1 tem o prof-2 na equipe. Nenhum paciente e visivel so por estar sem equipe.
+    assert.deepEqual(rows.map(row => row.id), ['pat-1']);
   });
 
   it('profissional ve apenas o proprio cadastro, e admin ve todos', async () => {
@@ -114,9 +112,9 @@ describe('negacao em tabelas filhas', () => {
   });
 
   it('profissional alheio nao le os check-ins de pat-3', async () => {
-    // prof-2 ve pat-1 e pat-2 (este sem equipe). Nada de pat-3/pat-4.
+    // prof-2 so tem pat-1 na equipe. Nada de pat-2, pat-3 ou pat-4.
     assert.equal(await count(professional('prof-2'), 'SELECT count(*)::int AS total FROM check_ins'),
-      sizeOf('pat-1', 'checkIns') + sizeOf('pat-2', 'checkIns'));
+      sizeOf('pat-1', 'checkIns'));
     assert.equal(await count(professional('prof-2'), 'SELECT count(*)::int AS total FROM check_ins WHERE patient_id = $1', ['pat-3']), 0);
     assert.equal(await count(professional('prof-1'), 'SELECT count(*)::int AS total FROM check_ins WHERE patient_id = $1', ['pat-3']), sizeOf('pat-3', 'checkIns'));
   });
@@ -439,5 +437,80 @@ describe('I9: a equipe do paciente nao se esvazia por baixo', () => {
     const removed = await run(professional('prof-1'), "DELETE FROM patients WHERE id = 'pat-tmp-i9'");
     assert.equal(removed.rowCount, 1);
     assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-tmp-i9'"), 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// I9 (fase 2, area 3): um paciente sem equipe NAO e visivel a profissional algum; so o
+// admin o ve. Quem cria um paciente entra na equipe dele, e ninguem "assume" um
+// paciente que ficou sem equipe.
+
+describe('I9: visibilidade fail-closed', () => {
+  // Copia pat-3 com outro id/e-mail/nome. Serve para criar um paciente sem montar as 28 colunas.
+  const insertCopy = (session, id) => run(session,
+    `INSERT INTO patients SELECT (jsonb_populate_record(NULL::patients, to_jsonb(p) || $1::jsonb)).*
+       FROM patients p WHERE p.id = 'pat-3'`,
+    [JSON.stringify({ id, email: `${id}@x.com`, name: `Temp ${id}` })]);
+  const cleanup = () => run(admin, "DELETE FROM patients WHERE id LIKE 'pat-%-i9'");
+  after(cleanup);
+
+  it('pat-2 tem uma equipe explicita (prof-1), em vez de ficar sem equipe', async () => {
+    const team = (await run(admin, "SELECT professional_id FROM patient_care_team WHERE patient_id = 'pat-2'")).rows;
+    assert.deepEqual(team.map(row => row.professional_id), ['prof-1']);
+  });
+
+  it('paciente sem equipe: nenhum profissional o ve, so o admin (e o proprio paciente)', async () => {
+    await cleanup();
+    await insertCopy(admin, 'pat-orfao-i9');
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-orfao-i9'"), 0);
+    assert.equal(await count(professional('prof-1'), "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-orfao-i9'"), 0);
+    assert.equal(await count(professional('prof-2'), "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-orfao-i9'"), 0);
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-orfao-i9'"), 1);
+    assert.equal(await count(patient('pat-orfao-i9'), "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-orfao-i9'"), 1);
+    await cleanup();
+  });
+
+  it('quem cria um paciente entra na equipe dele e o ve; o colega nao', async () => {
+    await cleanup();
+    await insertCopy(professional('prof-1'), 'pat-criado-i9');
+    const team = (await run(admin, "SELECT professional_id, role FROM patient_care_team WHERE patient_id = 'pat-criado-i9'")).rows;
+    assert.deepEqual(team, [{ professional_id: 'prof-1', role: 'cirurgiao' }]);
+    assert.equal(await count(professional('prof-1'), "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-criado-i9'"), 1);
+    assert.equal(await count(professional('prof-2'), "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-criado-i9'"), 0);
+    await cleanup();
+  });
+
+  it('o admin criar um paciente nao coloca ninguem na equipe', async () => {
+    await cleanup();
+    await insertCopy(admin, 'pat-admin-i9');
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-admin-i9'"), 0);
+    await cleanup();
+  });
+
+  it('profissional nao assume um paciente que ficou sem equipe', async () => {
+    await cleanup();
+    await insertCopy(admin, 'pat-livre-i9');
+    await assert.rejects(
+      () => run(professional('prof-2'),
+        `INSERT INTO patient_care_team (patient_id, professional_id, role, position) VALUES ('pat-livre-i9', 'prof-2', 'equipe', 0)`),
+      error => error.code === '42501'
+    );
+    assert.equal(await count(admin, "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id = 'pat-livre-i9'"), 0);
+    await cleanup();
+  });
+
+  it('o paciente nao cria paciente', async () => {
+    await cleanup();
+    await assert.rejects(() => insertCopy(patient('pat-1'), 'pat-intruso-i9'), error => error.code === '42501');
+    await cleanup();
+  });
+
+  it('o admin atribui uma equipe depois, e so entao o profissional ve o paciente', async () => {
+    await cleanup();
+    await insertCopy(admin, 'pat-depois-i9');
+    await run(admin, `INSERT INTO patient_care_team (patient_id, professional_id, role, position) VALUES ('pat-depois-i9', 'prof-2', 'equipe', 0)`);
+    assert.equal(await count(professional('prof-2'), "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-depois-i9'"), 1);
+    assert.equal(await count(professional('prof-1'), "SELECT count(*)::int AS total FROM patients WHERE id = 'pat-depois-i9'"), 0);
+    await cleanup();
   });
 });
