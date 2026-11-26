@@ -32,6 +32,8 @@ export class PatientPortalComponent {
   readonly sendingMessage = signal(false);
   readonly messageError = signal('');
   readonly patient = this.vivace.selectedPatient;
+  // O cirurgião da equipe do próprio paciente ("Nome (CRM)" no cadastro), sem o CRM.
+  readonly surgeonName = computed(() => (this.patient()?.surgeon ?? '').replace(/\s*\([^)]*\)\s*$/, '') || 'Equipe de cirurgia');
   readonly todayCheckIn = computed(() => {
     const day = (label: string) => Number(/\d+/.exec(label)?.[0] ?? 0);
     return this.patient()?.checkIns.reduce<DailyCheckIn | undefined>((latest, item) => !latest || day(item.dayLabel) > day(latest.dayLabel) ? item : latest, undefined);
