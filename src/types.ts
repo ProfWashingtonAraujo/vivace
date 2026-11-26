@@ -138,5 +138,7 @@ export interface AdminUser {
   email: string;
   /** Super administrador: o único que cria e apaga administradores. */
   isSuper?: boolean;
+  /** Foto: vazio (mostra a inicial), https ou imagem em data URL. */
+  avatar?: string;
   password?: string;
 }

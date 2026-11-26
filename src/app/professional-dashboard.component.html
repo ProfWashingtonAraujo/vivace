@@ -3,7 +3,7 @@
     <div class="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
       <div>
         <span class="inline-flex px-3 py-1 rounded-full bg-white/15 text-[#D1FAE5] text-xs font-bold border border-white/20">Plantão de monitoramento ativo</span>
-        <h1 class="text-2xl sm:text-3xl font-bold mt-3">Olá, {{ vivace.professionalUser().name }}</h1>
+        <h1 class="text-2xl sm:text-3xl font-bold mt-3">Olá, {{ vivace.currentProfessional().name }}</h1>
         <p class="text-blue-100 text-sm mt-1 max-w-xl">
           {{ vivace.patients().length }} {{ vivace.patients().length === 1 ? 'paciente em recuperação domiciliar' : 'pacientes em recuperação domiciliar' }}.
           {{ criticalCount() === 1 ? '1 paciente requer atenção imediata.' : criticalCount() ? criticalCount() + ' pacientes requerem atenção imediata.' : 'Todos evoluem com estabilidade.' }}
