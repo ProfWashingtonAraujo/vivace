@@ -22,8 +22,9 @@ const todayLabel = () => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', 
 const adminSession = { role: 'admin', userId: 'adm-1' };
 
 // Cada paciente so faz um check-in por dia. Os testes que enviam check-ins por outro motivo
-// partem de um dia limpo; os que testam a regra passam keepToday.
-const clearToday = () => withSession(pool, adminSession, client => client.query('DELETE FROM check_ins WHERE date = $1', [todayLabel()]));
+// partem de um dia limpo (os check-ins de hoje passam para uma data antiga, sem sair da lista);
+// os que testam a regra passam keepToday.
+const clearToday = () => withSession(pool, adminSession, client => client.query("UPDATE check_ins SET date = '01/01/2000' WHERE date = $1", [todayLabel()]));
 
 const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1', at = base, headers: extraHeaders = {}, keepToday = false } = {}) => {
   if (path === '/api/checkins' && method === 'POST' && !keepToday) await clearToday();
