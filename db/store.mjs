@@ -1,5 +1,5 @@
 import { createHash, randomUUID, scrypt as scryptCallback } from 'node:crypto';
-import { readAggregate, readPatient } from './aggregate.mjs';
+import { readAggregate, readMedications, readPatient } from './aggregate.mjs';
 import { asAdmin, createPool, withSession } from './session.mjs';
 import { exceedsDeletionLimit, idsMarkedRead } from '../lib/state-guards.mjs';
 import { brDateTime } from '../lib/br-time.mjs';
@@ -40,6 +40,10 @@ const photoImage = imageUrl => {
   }
   return { image: null, mime: null, url: value || null };
 };
+
+// Liga, so nesta transacao, a pausa do gatilho que recalcula a assinatura dos horarios
+// (migracao 017). Quem grava horarios pelo app calcula e grava a assinatura sozinho.
+const skipTimesSync = client => client.query("SELECT set_config('app.skip_times_sync', 'on', true)");
 
 const medicationAdherence = medications => {
   const slots = medications.flatMap(medication => (medication.times ?? []).map(time => medication.takenToday?.[time]));
@@ -305,16 +309,19 @@ const writeAppendOnly = async (client, table, patientId, items, columns, default
 const writeMedications = async (client, patientId, medications) => {
   for (const [index, medication] of (medications ?? []).entries()) {
     if (!medication || typeof medication.id !== 'string') continue;
+    const times = Array.isArray(medication.times) ? medication.times : [];
+    // A assinatura dos horarios (migracao 017) vai junto com a linha: a mudanca de
+    // horarios e mudanca de conteudo e sobe a versao UMA vez, em vez de uma por horario.
     await client.query(
-      `INSERT INTO medications (patient_id, id, position, name, dose, frequency, purpose, instructions)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      `INSERT INTO medications (patient_id, id, position, name, dose, frequency, purpose, instructions, times_signature)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        ON CONFLICT (patient_id, id) DO UPDATE SET
          position = EXCLUDED.position, name = EXCLUDED.name, dose = EXCLUDED.dose,
-         frequency = EXCLUDED.frequency, purpose = EXCLUDED.purpose, instructions = EXCLUDED.instructions`,
+         frequency = EXCLUDED.frequency, purpose = EXCLUDED.purpose, instructions = EXCLUDED.instructions,
+         times_signature = EXCLUDED.times_signature`,
       [patientId, medication.id, index, medication.name ?? '', medication.dose ?? '',
-        medication.frequency ?? '', medication.purpose ?? '', medication.instructions ?? '']
+        medication.frequency ?? '', medication.purpose ?? '', medication.instructions ?? '', times.join(',')]
     );
-    const times = Array.isArray(medication.times) ? medication.times : [];
     for (const [timeIndex, time] of times.entries()) {
       await client.query(
         `INSERT INTO medication_times (patient_id, medication_id, time, position) VALUES ($1,$2,$3,$4)
@@ -522,6 +529,9 @@ const writeAdmins = async (client, admins) => {
 // (rejectForeignPatients).
 export const putState = (session, incoming) => withSession(pool, session, async client => {
   if (session.role === 'patient') throw denied();
+  // writeMedications grava a assinatura dos horarios junto com a medicacao; o gatilho de
+  // medication_times recalcularia a cada horario inserido e subiria a versao varias vezes.
+  await skipTimesSync(client);
 
   // O payload carrega o professionals e o admins do estado local do frontend,
   // que para quem nao e admin sao os mocks do bundle. Escrever neles sobrescreveria
@@ -748,4 +758,211 @@ export const reviewWoundPhoto = (session, { patientId, photoId, status, feedback
       timelineEventId,
       woundReviewPending: pending
     };
+  });
+
+// ---------------------------------------- medicacoes e instrucoes (fase 2, area 2)
+//
+// Criar, editar e apagar por chamadas proprias. Editar e apagar exigem a versao que o
+// cliente leu (If-Match): a escrita so acontece se a versao ainda e a mesma, e isso e
+// decidido pelo proprio UPDATE/DELETE (`... AND version = $n`), de forma atomica; duas
+// edicoes concorrentes sobre a mesma versao nao passam as duas.
+
+const notFoundOf = what => Object.assign(new Error(`${what} not found`), { statusCode: 404, publicMessage: `${what} not found` });
+const versionConflict = current => Object.assign(new Error('Version conflict'), {
+  statusCode: 409,
+  current,
+  publicMessage: 'Outra pessoa alterou este item. Recarregue e tente de novo.'
+});
+
+const requireStaffWithAccess = async (client, session, patientId) => {
+  if (session.role === 'patient') throw denied();
+  const visible = await client.query('SELECT 1 FROM patients WHERE id = $1', [patientId]);
+  if (!visible.rows.length) throw notFound();
+};
+
+const readMedication = async (client, patientId, medicationId) => {
+  const rows = await client.query('SELECT * FROM medications WHERE patient_id = $1 AND id = $2', [patientId, medicationId]);
+  if (!rows.rows[0]) return null;
+  const times = await client.query('SELECT * FROM medication_times WHERE patient_id = $1 AND medication_id = $2', [patientId, medicationId]);
+  const doses = await client.query('SELECT * FROM medication_doses WHERE patient_id = $1 AND medication_id = $2', [patientId, medicationId]);
+  return readMedications(rows.rows, times.rows, doses.rows)[0];
+};
+
+// A aderencia do paciente depende das medicacoes e das doses: recalcula ao criar e ao apagar.
+const refreshAdherence = async (client, patientId) => {
+  const medications = await client.query('SELECT * FROM medications WHERE patient_id = $1', [patientId]);
+  const times = await client.query('SELECT * FROM medication_times WHERE patient_id = $1', [patientId]);
+  const doses = await client.query('SELECT * FROM medication_doses WHERE patient_id = $1', [patientId]);
+  const percent = medicationAdherence(readMedications(medications.rows, times.rows, doses.rows));
+  await client.query('UPDATE patients SET medication_adherence_percent = $2 WHERE id = $1', [patientId, percent]);
+};
+
+const MEDICATION_COLUMNS = { name: 'name', dose: 'dose', frequency: 'frequency', purpose: 'purpose', instructions: 'instructions' };
+
+export const createMedication = (session, { patientId, values, clientId }) =>
+  withSession(pool, session, async client => {
+    await requireStaffWithAccess(client, session, patientId);
+    await skipTimesSync(client);
+    const id = clientId ?? `med-${randomUUID()}`;
+    const inserted = await client.query(
+      `INSERT INTO medications (patient_id, id, position, name, dose, frequency, purpose, instructions, times_signature)
+       VALUES ($1, $2, (SELECT coalesce(max(position) + 1, 0) FROM medications WHERE patient_id = $1), $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (patient_id, id) DO NOTHING
+       RETURNING id`,
+      [patientId, id, values.name, values.dose, values.frequency, values.purpose, values.instructions, values.times.join(',')]
+    );
+    if (!inserted.rows[0]) return { medication: await readMedication(client, patientId, id), created: false };
+    for (const [index, time] of values.times.entries()) {
+      await client.query(
+        'INSERT INTO medication_times (patient_id, medication_id, time, position) VALUES ($1, $2, $3, $4)',
+        [patientId, id, time, index]
+      );
+      await client.query(
+        'INSERT INTO medication_doses (patient_id, medication_id, time, taken) VALUES ($1, $2, $3, false)',
+        [patientId, id, time]
+      );
+    }
+    await refreshAdherence(client, patientId);
+    return { medication: await readMedication(client, patientId, id), created: true };
+  });
+
+export const updateMedication = (session, { patientId, medicationId, values, version }) =>
+  withSession(pool, session, async client => {
+    await requireStaffWithAccess(client, session, patientId);
+    await skipTimesSync(client);
+    const before = await readMedication(client, patientId, medicationId);
+    if (!before) throw notFoundOf('Medication');
+
+    const assignments = [];
+    const params = [patientId, medicationId, version];
+    for (const [field, column] of Object.entries(MEDICATION_COLUMNS)) {
+      if (field in values) {
+        params.push(values[field]);
+        assignments.push(`${column} = $${params.length}`);
+      }
+    }
+    if (values.times) {
+      params.push(values.times.join(','));
+      assignments.push(`times_signature = $${params.length}`);
+    }
+    // Sem campo nenhum a mudar ainda confere a versao: o UPDATE de `name = name` nao
+    // altera o conteudo (a versao nao sobe) mas falha se a versao nao for a esperada.
+    const updated = await client.query(
+      `UPDATE medications SET ${assignments.length ? assignments.join(', ') : 'name = name'}
+        WHERE patient_id = $1 AND id = $2 AND version = $3
+        RETURNING id`,
+      params
+    );
+    if (!updated.rows[0]) throw versionConflict(await readMedication(client, patientId, medicationId));
+
+    if (values.times) {
+      const keep = new Set(values.times);
+      for (const time of before.times) {
+        if (keep.has(time)) continue;
+        await client.query('DELETE FROM medication_times WHERE patient_id = $1 AND medication_id = $2 AND time = $3', [patientId, medicationId, time]);
+        await client.query('DELETE FROM medication_doses WHERE patient_id = $1 AND medication_id = $2 AND time = $3', [patientId, medicationId, time]);
+      }
+      for (const [index, time] of values.times.entries()) {
+        await client.query(
+          `INSERT INTO medication_times (patient_id, medication_id, time, position) VALUES ($1, $2, $3, $4)
+           ON CONFLICT (patient_id, medication_id, time) DO UPDATE SET position = EXCLUDED.position`,
+          [patientId, medicationId, time, index]
+        );
+        // Dose ja existente (tomada ou nao) fica como esta; horario novo nasce nao tomado.
+        await client.query(
+          `INSERT INTO medication_doses (patient_id, medication_id, time, taken) VALUES ($1, $2, $3, false)
+           ON CONFLICT (patient_id, medication_id, time) DO NOTHING`,
+          [patientId, medicationId, time]
+        );
+      }
+      await refreshAdherence(client, patientId);
+    }
+    const medication = await readMedication(client, patientId, medicationId);
+    return { medication, changed: medication.version !== version };
+  });
+
+export const deleteMedication = (session, { patientId, medicationId, version }) =>
+  withSession(pool, session, async client => {
+    await requireStaffWithAccess(client, session, patientId);
+    const removed = await client.query(
+      'DELETE FROM medications WHERE patient_id = $1 AND id = $2 AND version = $3 RETURNING id',
+      [patientId, medicationId, version]
+    );
+    if (!removed.rows[0]) {
+      const current = await readMedication(client, patientId, medicationId);
+      if (!current) throw notFoundOf('Medication');
+      throw versionConflict(current);
+    }
+    await refreshAdherence(client, patientId);
+    return { id: medicationId };
+  });
+
+const instructionOf = row => row && ({
+  id: row.id,
+  category: row.category,
+  title: row.title,
+  content: row.content,
+  iconName: row.icon_name,
+  important: row.important,
+  version: row.version
+});
+
+const readInstruction = async (client, patientId, instructionId) => {
+  const { rows } = await client.query('SELECT * FROM instructions WHERE patient_id = $1 AND id = $2', [patientId, instructionId]);
+  return instructionOf(rows[0]);
+};
+
+const INSTRUCTION_COLUMNS = { category: 'category', title: 'title', content: 'content', iconName: 'icon_name', important: 'important' };
+
+export const createInstruction = (session, { patientId, values, clientId }) =>
+  withSession(pool, session, async client => {
+    await requireStaffWithAccess(client, session, patientId);
+    const id = clientId ?? `inst-${randomUUID()}`;
+    const inserted = await client.query(
+      `INSERT INTO instructions (patient_id, id, position, category, title, content, icon_name, important)
+       VALUES ($1, $2, (SELECT coalesce(max(position) + 1, 0) FROM instructions WHERE patient_id = $1), $3, $4, $5, $6, $7)
+       ON CONFLICT (patient_id, id) DO NOTHING
+       RETURNING id`,
+      [patientId, id, values.category, values.title, values.content, values.iconName ?? values.category, values.important]
+    );
+    return { instruction: await readInstruction(client, patientId, id), created: Boolean(inserted.rows[0]) };
+  });
+
+export const updateInstruction = (session, { patientId, instructionId, values, version }) =>
+  withSession(pool, session, async client => {
+    await requireStaffWithAccess(client, session, patientId);
+    if (!(await readInstruction(client, patientId, instructionId))) throw notFoundOf('Instruction');
+
+    const assignments = [];
+    const params = [patientId, instructionId, version];
+    for (const [field, column] of Object.entries(INSTRUCTION_COLUMNS)) {
+      if (field in values) {
+        params.push(values[field]);
+        assignments.push(`${column} = $${params.length}`);
+      }
+    }
+    const updated = await client.query(
+      `UPDATE instructions SET ${assignments.length ? assignments.join(', ') : 'title = title'}
+        WHERE patient_id = $1 AND id = $2 AND version = $3
+        RETURNING id`,
+      params
+    );
+    if (!updated.rows[0]) throw versionConflict(await readInstruction(client, patientId, instructionId));
+    const instruction = await readInstruction(client, patientId, instructionId);
+    return { instruction, changed: instruction.version !== version };
+  });
+
+export const deleteInstruction = (session, { patientId, instructionId, version }) =>
+  withSession(pool, session, async client => {
+    await requireStaffWithAccess(client, session, patientId);
+    const removed = await client.query(
+      'DELETE FROM instructions WHERE patient_id = $1 AND id = $2 AND version = $3 RETURNING id',
+      [patientId, instructionId, version]
+    );
+    if (!removed.rows[0]) {
+      const current = await readInstruction(client, patientId, instructionId);
+      if (!current) throw notFoundOf('Instruction');
+      throw versionConflict(current);
+    }
+    return { id: instructionId };
   });

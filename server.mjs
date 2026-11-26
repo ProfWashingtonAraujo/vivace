@@ -13,6 +13,7 @@ import { parseJson, readBody, safeHandler } from './lib/http.mjs';
 import { parseImageUpload } from './lib/image-upload.mjs';
 import { removesLastAdmin } from './lib/state-guards.mjs';
 import { validateNote, validateReview } from './lib/staff-actions.mjs';
+import { parseIfMatch, validateInstruction, validateMedication } from './lib/catalog.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
@@ -185,13 +186,14 @@ const bootstrapConfig = resolveBootstrap();
 
 const shortText = (value, fallback) => (typeof value === 'string' && value && value.length <= maxShortField ? value : fallback);
 
-const failureStatus = error => ([400, 403, 404, 409, 413].includes(error.statusCode) ? error.statusCode : 500);
+const failureStatus = error => ([400, 403, 404, 409, 413, 428].includes(error.statusCode) ? error.statusCode : 500);
 const failureMessage = (error, fallback) => error.publicMessage ?? ({
   400: 'Requisição inválida',
   403: 'Insufficient permissions',
   404: 'Patient not found',
   409: 'Alteração recusada: o estado enviado apagaria vários pacientes de uma vez. Recarregue a página.',
-  413: 'Corpo da requisição grande demais'
+  413: 'Corpo da requisição grande demais',
+  428: 'Informe a versão que você leu no cabeçalho If-Match'
 }[failureStatus(error)] ?? fallback);
 
 const bootstrapAdmin = async () => store.bootstrapAdmin({
@@ -553,6 +555,83 @@ const handleRequest = async (request, response) => {
     }
     return decoded && decoded.length <= maxShortField ? decoded : null;
   };
+
+  // Medicações e instruções (fase 2, área 2). Criar é POST na coleção; editar e apagar são
+  // PATCH e DELETE no item e exigem a versão lida em If-Match. Uma versão que mudou
+  // responde 409 com o item atual, e a falta do cabeçalho responde 428.
+  const catalog = {
+    medications: {
+      entity: 'medication', event: 'medication.changed', idKey: 'medicationId', label: 'Medication',
+      validate: validateMedication,
+      create: store.createMedication, update: store.updateMedication, remove: store.deleteMedication
+    },
+    instructions: {
+      entity: 'instruction', event: 'instruction.changed', idKey: 'instructionId', label: 'Instruction',
+      validate: validateInstruction,
+      create: store.createInstruction, update: store.updateInstruction, remove: store.deleteInstruction
+    }
+  };
+  const catalogRoute = /^\/api\/patients\/([^/]+)\/(medications|instructions)(?:\/([^/]+))?$/.exec(pathname);
+  const catalogMethods = catalogRoute?.[3] === undefined ? ['POST'] : ['PATCH', 'DELETE'];
+  if (catalogRoute && catalogMethods.includes(request.method)) {
+    const session = await authorize(request, response);
+    if (!session) return;
+    if (session.role === 'patient') {
+      forbidden(request, response);
+      return;
+    }
+    const kind = catalog[catalogRoute[2]];
+    try {
+      const patientId = pathId(catalogRoute[1]);
+      const itemId = catalogRoute[3] === undefined ? undefined : pathId(catalogRoute[3]);
+      if (!patientId || (catalogRoute[3] !== undefined && !itemId)) {
+        json(request, response, 404, { error: `${kind.label} not found` });
+        return;
+      }
+
+      if (request.method === 'POST') {
+        const input = kind.validate(parseJson(await readBody(request, bodyLimits.message)));
+        if (!input.ok) {
+          json(request, response, 400, { error: `Invalid ${kind.entity}` });
+          return;
+        }
+        const { [kind.entity]: item, created } = await kind.create(session, { patientId, values: input.values, clientId: input.clientId });
+        json(request, response, created ? 201 : 200, { [kind.entity]: item });
+        if (created) publishSafely({ type: kind.event, patientId, [kind.idKey]: item.id, change: 'created' });
+        return;
+      }
+
+      const precondition = parseIfMatch(request.headers['if-match']);
+      if (!precondition.ok) {
+        const missing = precondition.reason === 'missing';
+        json(request, response, missing ? 428 : 400, { error: missing ? failureMessage({ statusCode: 428 }, '') : 'If-Match inválido' });
+        return;
+      }
+
+      if (request.method === 'PATCH') {
+        const input = kind.validate(parseJson(await readBody(request, bodyLimits.message)), { partial: true });
+        if (!input.ok) {
+          json(request, response, 400, { error: `Invalid ${kind.entity}` });
+          return;
+        }
+        const { [kind.entity]: item, changed } = await kind.update(session, { patientId, [kind.idKey]: itemId, values: input.values, version: precondition.version });
+        json(request, response, 200, { [kind.entity]: item });
+        if (changed) publishSafely({ type: kind.event, patientId, [kind.idKey]: itemId, change: 'updated' });
+        return;
+      }
+
+      await kind.remove(session, { patientId, [kind.idKey]: itemId, version: precondition.version });
+      json(request, response, 200, { deleted: true, id: itemId });
+      publishSafely({ type: kind.event, patientId, [kind.idKey]: itemId, change: 'deleted' });
+    } catch (error) {
+      console.error('Catalog API error:', error);
+      json(request, response, failureStatus(error), {
+        error: failureMessage(error, `Could not save ${kind.entity}`),
+        ...(error.current ? { current: error.current } : {})
+      });
+    }
+    return;
+  }
 
   const noteRoute = /^\/api\/patients\/([^/]+)\/clinical-notes$/.exec(pathname);
   if (noteRoute && request.method === 'POST') {

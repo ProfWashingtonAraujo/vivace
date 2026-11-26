@@ -1474,14 +1474,20 @@ describe('Fase 2 / area 2: medicacoes', () => {
     assert.equal((await postItem('medications', staff, 'pat-que-nao-existe', medBody())).status, 404);
   });
 
-  it('a aderencia do paciente e recalculada ao criar e ao apagar', async () => {
+  it('a aderencia do paciente e recalculada ao criar e ao apagar, pela mesma conta das doses', async () => {
+    // O percentual gravado no seed pode nao bater com as doses; o que se confere e que,
+    // depois de cada operacao, ele passa a ser exatamente o que as doses implicam.
+    const adherenceFrom = patient => {
+      const slots = patient.medications.flatMap(item => item.times.map(time => item.takenToday[time]));
+      return slots.length ? Math.round(slots.filter(Boolean).length / slots.length * 100) : 100;
+    };
     const staff = (await login('Rafaely Carvalho')).token;
-    const before = patientOf(await staffState(staff), 'pat-1').medicationAdherencePercent;
     const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Aderencia area2' }))).body;
-    const during = patientOf(await staffState(staff), 'pat-1').medicationAdherencePercent;
-    assert.ok(during <= before, 'um remedio novo, ainda nao tomado, nao pode aumentar a aderencia');
+    const afterCreate = patientOf(await staffState(staff), 'pat-1');
+    assert.equal(afterCreate.medicationAdherencePercent, adherenceFrom(afterCreate));
     assert.equal((await deleteItem('medications', staff, 'pat-1', medication.id, medication.version)).status, 200);
-    assert.equal(patientOf(await staffState(staff), 'pat-1').medicationAdherencePercent, before);
+    const afterDelete = patientOf(await staffState(staff), 'pat-1');
+    assert.equal(afterDelete.medicationAdherencePercent, adherenceFrom(afterDelete));
   });
 
   it('o evento chega a equipe e ao paciente dono, sem o conteudo da medicacao', async () => {

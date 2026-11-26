@@ -22,7 +22,7 @@ const photoUrl = row => {
   return row.image_source_url ?? '';
 };
 
-const readMedications = (medications, times, doses) => medications.map(medication => {
+export const readMedications = (medications, times, doses) => medications.map(medication => {
   const medicationTimes = ordered(times.filter(time => time.medication_id === medication.id));
   const takenToday = {};
   for (const time of medicationTimes) {

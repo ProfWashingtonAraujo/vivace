@@ -222,6 +222,26 @@ A nota entra no início da lista, tem até 2000 caracteres e só a equipe com ac
 
 Em tempo real, uma nota gera `clinical-note.created`, **só para a equipe e sem o texto** (até a existência de uma nota é dela), e uma avaliação gera `wound-photo.reviewed`, que o paciente dono também recebe, sem o comentário. O `POST /api/messages` passou a usar sempre o nome da sessão como remetente, para os dois lados. A marcação de mensagem como lida não ganhou chamada porque nenhuma tela a usa: o front nunca marca `isRead`.
 
+### Medicações e instruções (fase 2, área 2)
+
+Criar, editar e apagar por chamadas próprias, com controle de versão:
+
+| Chamada | Corpo | Resposta |
+| --- | --- | --- |
+| `POST /api/patients/:id/medications` | `{ name, times, dose?, frequency?, purpose?, instructions?, clientId? }` | `201 { medication }` (`200` se o `clientId` se repetir) |
+| `PATCH /api/patients/:id/medications/:mid` | só os campos a mudar; cabeçalho `If-Match: <versão>` | `200 { medication }` |
+| `DELETE /api/patients/:id/medications/:mid` | cabeçalho `If-Match: <versão>` | `200 { deleted, id }` |
+| `POST /api/patients/:id/instructions` | `{ category, title, content?, important?, iconName?, clientId? }` | `201 { instruction }` |
+| `PATCH` e `DELETE /api/patients/:id/instructions/:iid` | como acima | `200` |
+
+`times` é uma lista de 1 a 12 horários `HH:MM` sem repetição; `category` é uma de `curativo`, `alimentacao`, `atividade`, `higiene`, `alerta`, `medicacao`. Id e versão são do servidor (o corpo não os escolhe), e o paciente recebe `403` em todas.
+
+**`If-Match` é obrigatório em `PATCH` e `DELETE`.** Sem ele a resposta é `428`; com um valor que não é inteiro positivo, `400`; com uma versão que já mudou, `409` com o item atual em `current`, e nada é gravado. A conferência é do próprio `UPDATE ... WHERE version = $n`, então duas edições sobre a mesma versão não passam as duas. Regravar os mesmos valores não sobe a versão.
+
+**Horários contam como conteúdo da medicação** (migração `017`). Eles ficam em `medication_times`, outra tabela; sem tratamento, trocar só os horários não mexeria na linha da medicação e a versão não subiria. A medicação ganhou `times_signature` (os horários em ordem, separados por vírgula), e como a coluna faz parte da linha, mudar os horários sobe a versão. O app grava a assinatura junto com a medicação (por isso desliga, só na transação, o gatilho de `medication_times` com `app.skip_times_sync`; sem isso cada horário inserido subiria a versão); o gatilho existe como rede de segurança para SQL direto. As doses já tomadas dos horários que ficam são mantidas, e um horário novo nasce não tomado. A aderência do paciente é recalculada ao criar e ao apagar.
+
+Em tempo real, `medication.changed` e `instruction.changed` (com `change` igual a `created`, `updated` ou `deleted`) chegam à equipe e ao paciente dono, sem o conteúdo.
+
 ### Administrador inicial
 
 O primeiro administrador é criado por `app_bootstrap_admin` (migração `014`), uma função `SECURITY DEFINER` chamada com o papel `vivace_api`. Ela só cria quando **não existe nenhum administrador**, de forma atômica (duas chamadas simultâneas não criam duas contas) e nunca altera uma conta existente nem a senha dela. O servidor a chama uma vez na subida e memoiza o sucesso; antes ela rodava a cada login, abrindo uma conexão de dono do banco só para perguntar se já havia admin. A conversão de uma senha antiga em texto plano para `scrypt` passa por `app_set_credential`, o mesmo caminho de escrita das senhas do `PUT`.
