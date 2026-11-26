@@ -719,7 +719,7 @@ describe('C1: o stream de eventos respeita a equipe do paciente', () => {
   };
   after(() => streams.forEach(stream => stream.close()));
 
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('profissional fora da equipe nao recebe a mensagem do paciente; o da equipe e o admin recebem', async () => {
     const teamMember = await open((await login('Rafaely Carvalho')).token);
@@ -942,12 +942,14 @@ const ensureOutsider = async () => {
   // Helena nao esta na equipe de ninguem: so enxerga o paciente sem equipe, se houver.
   const admin = (await login('admin@vivace.med.br')).token;
   const full = await staffState(admin);
-  if (full.professionals.some(professional => professional.email === 'helena@vivace.med.br')) return;
+  const existing = full.professionals.find(professional => professional.email === 'helena@vivace.med.br');
+  if (existing) return existing.id;
   const created = await call('/api/professionals', {
     method: 'POST', token: admin,
     body: { name: 'Helena Duarte', role: 'Cirurgia Plastica', crmCoren: 'CRM-SP 222.111', email: 'helena@vivace.med.br', specialty: 'Cirurgia Plastica', password: 'vivace-demo' }
   });
   assert.ok([200, 201].includes(created.status), JSON.stringify(created.body));
+  return created.body.professional.id;
 };
 
 const postNote = (token, patientId, body) =>
@@ -966,7 +968,7 @@ const patientSendsPhoto = async () => {
 };
 
 describe('Fase 2 / area 1: notas clinicas', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('a equipe cria a nota; autor, data e id vem do servidor, nao do cliente', async () => {
     const staff = (await login('Rafaely Carvalho')).token;
@@ -1043,7 +1045,7 @@ describe('Fase 2 / area 1: notas clinicas', () => {
 });
 
 describe('Fase 2 / area 1: avaliacao de foto da ferida', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('a equipe avalia; revisor, data e linha do tempo vem do servidor', async () => {
     const photoId = await patientSendsPhoto();
@@ -1167,7 +1169,7 @@ const instructionOf = async (token, patientId, id) =>
   patientOf(await staffState(token), patientId).instructions.find(item => item.id === id);
 
 describe('Fase 2 / area 2: medicacoes', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('a equipe cria; id e versao vem do servidor, e cada horario nasce nao tomado', async () => {
     const staff = (await login('Rafaely Carvalho')).token;
@@ -1339,7 +1341,7 @@ describe('Fase 2 / area 2: medicacoes', () => {
 });
 
 describe('Fase 2 / area 2: instrucoes de pos-operatorio', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('a equipe cria; id e versao vem do servidor, e o icone padrao e a categoria', async () => {
     const staff = (await login('Rafaely Carvalho')).token;
@@ -1433,7 +1435,7 @@ const visibleIds = async token => (await staffState(token)).patients.map(patient
 const loginAs = (username, password, ip) => call('/api/auth/login', { method: 'POST', ip, body: { username, password } });
 
 describe('Fase 2 / area 3b: criar paciente', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('o profissional cria; id, versao, status e dia de pos-operatorio vem do servidor, e ele entra na equipe', async () => {
     const staff = (await login('Rafaely Carvalho')).token;
@@ -1501,7 +1503,7 @@ describe('Fase 2 / area 3b: criar paciente', () => {
 });
 
 describe('Fase 2 / area 3b: editar e apagar paciente', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
   const fresh = async name => {
     const staff = (await login('Rafaely Carvalho')).token;
     return { staff, patient: (await postPatient(staff, newPatient({ name }))).body.patient };
@@ -1563,7 +1565,7 @@ describe('Fase 2 / area 3b: editar e apagar paciente', () => {
 });
 
 describe('Fase 2 / area 3b: senha e equipe do paciente', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('a equipe troca a senha: a nova entra, a antiga nao; senha curta 400; paciente 403; fora da equipe 404', async () => {
     const staff = (await login('Rafaely Carvalho')).token;
@@ -1582,6 +1584,7 @@ describe('Fase 2 / area 3b: senha e equipe do paciente', () => {
   it('so o admin define a equipe: troca, esvazia, recusa profissional que nao existe', async () => {
     const admin = (await login('admin@vivace.med.br')).token;
     const staff = (await login('Rafaely Carvalho')).token;
+    const helena = await ensureOutsider();
     const { patient } = (await postPatient(admin, { ...newPatient({ name: 'Equipe 3b' }), professionalIds: ['prof-1'] })).body;
     assert.equal((await putTeam(staff, patient.id, { professionalIds: [] })).status, 403, 'profissional nao define equipe');
     assert.equal((await putTeam((await login('mariana')).token, patient.id, { professionalIds: [] })).status, 403);
@@ -1593,9 +1596,9 @@ describe('Fase 2 / area 3b: senha e equipe do paciente', () => {
     assert.ok(!(await visibleIds(staff)).includes(patient.id), 'a equipe esvaziada continua vendo o paciente');
     assert.ok((await visibleIds(admin)).includes(patient.id));
 
-    const restored = await putTeam(admin, patient.id, { professionalIds: ['prof-1', 'prof-9'] });
+    const restored = await putTeam(admin, patient.id, { professionalIds: ['prof-1', helena] });
     assert.equal(restored.status, 200, JSON.stringify(restored.body));
-    assert.deepEqual(restored.body.careTeam, [{ professionalId: 'prof-1', role: 'cirurgiao' }, { professionalId: 'prof-9', role: 'equipe' }]);
+    assert.deepEqual(restored.body.careTeam, [{ professionalId: 'prof-1', role: 'cirurgiao' }, { professionalId: helena, role: 'equipe' }]);
     assert.ok((await visibleIds(staff)).includes(patient.id));
     assert.ok((await visibleIds((await login('Helena Duarte')).token)).includes(patient.id));
 
@@ -1743,7 +1746,7 @@ describe('Fase 2 / area 4: administradores', () => {
 });
 
 describe('Fase 2 / area 5: status do paciente', () => {
-  before(ensureOutsider);
+  before(() => ensureOutsider());
 
   it('a equipe define o status; valores invalidos 400; paciente 403; fora da equipe 404', async () => {
     const staff = (await login('Rafaely Carvalho')).token;
