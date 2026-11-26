@@ -6,10 +6,9 @@ import { AdminUser, AlertSeverity, ChatMessage, DailyCheckIn, MedicationItem, Pa
 const STORAGE_KEY = 'vivace_patients_v2';
 const PROFESSIONALS_STORAGE_KEY = 'vivace_professionals_v1';
 const SESSION_STORAGE_KEY = 'vivace_session_v1';
-const SYNC_PENDING_STORAGE_KEY = 'vivace_sync_pending_v1';
-// Prontuário, cadastros e a marca de "há alteração a enviar" ficam só na aba
-// (sessionStorage): somem quando ela fecha, em vez de ficar para sempre no
-// computador, e logout/401 apagam na hora. Só o token da sessão pode ir para o
+const SYNC_PENDING_STORAGE_KEY = 'vivace_sync_pending_v1'; // chave antiga: só para limpar
+// Prontuário e cadastros ficam só na aba (sessionStorage): somem quando ela
+// fecha, em vez de ficar para sempre no computador, e logout/401 apagam na hora. Só o token da sessão pode ir para o
 // localStorage, e só se o usuário marcar "Lembrar neste dispositivo".
 const EVENT_RETRY_MIN_MS = 1_000;
 const EVENT_RETRY_MAX_MS = 30_000;
@@ -43,10 +42,7 @@ export class VivaceService {
   private readonly patientsState = signal<Patient[]>(this.loadPatients());
   private readonly professionalsState = signal<ProfessionalUser[]>(this.loadProfessionals());
   private readonly adminsState = signal<AdminUser[]>([structuredClone(CURRENT_ADMIN)]);
-  private saveQueue = Promise.resolve();
-  private pendingSaves = 0;
-  private stateRevision = 0;
-  private hasUnsavedChanges = this.loadSyncPending();
+  private noticeTimer = 0;
   private token = this.storedSession?.token ?? '';
   private eventsAbort: AbortController | null = null;
 
@@ -56,6 +52,8 @@ export class VivaceService {
   readonly activePatientId = signal(this.storedSession?.role === 'patient' ? this.storedSession.patientId : 'pat-1');
   readonly currentRole = signal<UserRole>(this.storedSession?.role ?? 'professional');
   readonly isLoggedIn = signal(this.storedSession !== null);
+  // Aviso de falha ou conflito de uma gravação, mostrado pelo shell do app.
+  readonly notice = signal<{ text: string; error: boolean } | null>(null);
   readonly sessionName = signal(this.storedSession?.name ?? '');
   readonly professionalUser = computed(() => this.professionals()[0] ?? CURRENT_PROFESSIONAL);
   readonly selectedPatient = computed(() =>
@@ -77,7 +75,7 @@ export class VivaceService {
     });
     void this.loadSharedState();
     if (this.token) this.listenForMessages();
-    window.setInterval(() => void this.loadSharedState(false), SYNC_INTERVAL_MS);
+    window.setInterval(() => void this.loadSharedState(), SYNC_INTERVAL_MS);
     effect(() => {
       const professionals = this.professionals();
       if (!this.isLoggedIn()) return;
@@ -138,308 +136,191 @@ export class VivaceService {
     }
   }
 
-  syncPendingChanges(): Promise<boolean> {
-    return this.saveSharedState();
+  notify(text: string, error = false): void {
+    this.notice.set({ text, error });
+    window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => this.notice.set(null), 7_000);
   }
 
-  addProfessional(professional: Omit<ProfessionalUser, 'id'>): Promise<boolean> {
-    this.professionalsState.update(professionals => [
-      ...professionals,
-      { ...professional, id: `prof-${Date.now()}` }
-    ]);
-    return this.saveSharedState();
-  }
-
-  updateProfessional(id: string, changes: Omit<ProfessionalUser, 'id' | 'avatar'>, avatar?: string): Promise<boolean> {
-    const currentProfessional = this.professionals().find(professional => professional.id === id);
-    this.professionalsState.update(professionals => professionals.map(professional =>
-      professional.id === id ? {
-        ...professional,
-        ...changes,
-        avatar: avatar === undefined ? professional.avatar : avatar || this.avatarFor(changes.name),
-        password: changes.password || professional.password
-      } : professional
-    ));
-    if (currentProfessional) {
-      const currentSurgeon = `${currentProfessional.name} (${currentProfessional.crmCoren})`;
-      const defaultSurgeon = `${CURRENT_PROFESSIONAL.name} (${CURRENT_PROFESSIONAL.crmCoren})`;
-      const updatedSurgeon = `${changes.name} (${changes.crmCoren})`;
-      this.patientsState.update(patients => patients.map(patient => patient.surgeon === currentSurgeon || patient.surgeon === defaultSurgeon
-        ? { ...patient, surgeon: updatedSurgeon }
-        : patient));
-    }
-    return this.saveSharedState();
-  }
-
-  deleteProfessional(id: string): boolean {
-    if (this.professionals().length <= 1) return false;
-    this.professionalsState.update(professionals => professionals.filter(professional => professional.id !== id));
-    void this.saveSharedState();
-    return true;
-  }
-
-  addPatient(patient: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): Promise<boolean> {
-    const surgeryDate = new Date(`${patient.surgeryDate}T12:00:00`);
-    const postOpDay = Number.isNaN(surgeryDate.getTime())
-      ? 0
-      : Math.max(0, Math.floor((Date.now() - surgeryDate.getTime()) / 86_400_000));
-    const professional = this.professionals()[0] ?? CURRENT_PROFESSIONAL;
-    const newPatient: Patient = {
-      ...patient,
-      id: `pat-${Date.now()}`,
-      avatar: avatar || this.avatarFor(patient.name),
-      surgeon: `${professional.name} (${professional.crmCoren})`,
-      anesthesiaType: 'Não informado',
-      allergies: [],
-      status: 'estavel',
-      postOpDay,
-      lastCheckInTime: 'Aguardando primeiro check-in',
-      currentPain: 0,
-      currentTemp: 36.5,
-      bloodPressure: 'Não informado',
-      heartRate: 0,
-      woundReviewPending: false,
-      medicationAdherencePercent: 100,
-      emergencyContact: { name: 'Não informado', phone: '', relationship: '' },
-      timeline: [],
-      woundPhotos: [],
-      medications: [],
-      checkIns: [],
-      messages: [],
-      instructions: [],
-      clinicalNotes: []
-    };
-    this.patientsState.update(patients => [...patients, newPatient]);
-    return this.saveSharedState();
-  }
-
-  updatePatientRegistration(id: string, changes: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): Promise<boolean> {
-    const surgeryDate = new Date(`${changes.surgeryDate}T12:00:00`);
-    const postOpDay = Number.isNaN(surgeryDate.getTime())
-      ? 0
-      : Math.max(0, Math.floor((Date.now() - surgeryDate.getTime()) / 86_400_000));
-    return this.updatePatient(id, patient => ({
-      ...patient,
-      ...changes,
-      avatar: avatar === undefined ? patient.avatar : avatar || this.avatarFor(changes.name),
-      password: changes.password || patient.password,
-      postOpDay
-    }));
-  }
-
-  deletePatient(id: string): boolean {
-    if (this.patients().length <= 1) return false;
-    this.patientsState.update(patients => patients.filter(patient => patient.id !== id));
-    if (this.activePatientId() === id) this.activePatientId.set(this.patients()[0].id);
-    void this.saveSharedState();
-    return true;
-  }
-
-  submitDailyCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>, photo?: { imageUrl: string; patientNotes?: string }): Promise<boolean> {
-    if (this.currentRole() === 'patient') return this.sendPatientCheckIn(patientId, data, photo);
-    return this.updatePatient(patientId, patient => {
-      const now = new Date();
-      const status: AlertSeverity = data.painLevel >= 7 || data.temperature >= 37.8
-        ? 'critico'
-        : data.painLevel >= 4 || data.temperature >= 37.3
-          ? 'atencao'
-          : 'estavel';
-      const checkIn: DailyCheckIn = { ...data, id: `chk-${Date.now()}` };
-
-      return {
-        ...patient,
-        checkIns: [checkIn, ...patient.checkIns],
-        currentPain: data.painLevel,
-        currentTemp: data.temperature,
-        lastCheckInTime: `Hoje às ${this.time(now)}`,
-        status,
-        timeline: [...patient.timeline, {
-          id: `tl-${Date.now()}`,
-          date: `${this.date(now)} ${this.time(now)}`,
-          dayLabel: data.dayLabel,
-          title: `Check-in Diário (${data.dayLabel})`,
-          description: `Dor ${data.painLevel}/10, Temp ${data.temperature}°C. ${data.notes ?? ''}`.trim(),
-          author: `${patient.name} (Paciente)`,
-          type: 'checkin'
-        }]
-      };
-    });
-  }
-
-  private async sendPatientCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>, photo?: { imageUrl: string; patientNotes?: string }): Promise<boolean> {
-    if (!this.token) return false;
+  // Toda gravação é uma chamada própria e só vale quando o servidor confirma: nada é
+  // alterado na tela antes disso. 409 (versão que mudou) e erros viram aviso, e o estado
+  // é recarregado para a tela refletir o que está no servidor.
+  private async call<T>(method: string, path: string, options: { body?: unknown; version?: number } = {}): Promise<{ ok: true; data: T } | { ok: false }> {
+    if (!this.token) return { ok: false };
+    const headers: Record<string, string> = {};
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (options.version !== undefined) headers['If-Match'] = `"${options.version}"`;
     try {
-      const response = await this.authFetch(this.apiUrl('/api/checkins'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: `chk-${Date.now()}`,
-          patientId,
-          checkIn: data,
-          photo: photo ? { id: `wp-${Date.now()}`, imageUrl: photo.imageUrl, patientNotes: photo.patientNotes } : undefined
-        })
+      const response = await this.authFetch(this.apiUrl(path), {
+        method,
+        headers,
+        body: options.body === undefined ? undefined : JSON.stringify(options.body)
       });
       if (response.status === 401) {
         await this.handleUnauthorized();
-        return false;
+        return { ok: false };
       }
-      if (!response.ok) return false;
-      const result = await response.json() as { patient: Patient };
-      this.mergePatient(result.patient);
-      this.hasUnsavedChanges = false;
-      this.storeSyncPending(false);
-      return true;
+      const data = await response.json().catch(() => ({})) as T & { error?: string; current?: unknown };
+      if (response.ok) return { ok: true, data };
+      if (response.status === 409 && data.current) {
+        this.notify('Este registro foi alterado por outra pessoa. Mostramos a versão atual; confira e refaça a alteração.', true);
+        void this.loadSharedState();
+      } else if (response.status === 409) {
+        this.notify(data.error ?? 'A alteração conflita com um cadastro existente.', true);
+      } else if (response.status === 403) {
+        this.notify('Você não tem permissão para esta ação.', true);
+      } else if (response.status === 404) {
+        this.notify('O registro não existe mais. Atualizamos a tela.', true);
+        void this.loadSharedState();
+      } else if (response.status === 400 || response.status === 413) {
+        this.notify('Os dados enviados não foram aceitos. Revise os campos e tente de novo.', true);
+      } else {
+        this.notify('Não foi possível salvar agora. Tente novamente.', true);
+      }
+      return { ok: false };
     } catch {
+      this.notify('Sem conexão com o servidor. A alteração não foi salva.', true);
+      return { ok: false };
+    }
+  }
+
+  // Grava e, se deu certo, traz o estado novo do servidor.
+  private async save(method: string, path: string, options: { body?: unknown; version?: number } = {}): Promise<boolean> {
+    const result = await this.call<unknown>(method, path, options);
+    if (!result.ok) return false;
+    await this.loadSharedState();
+    return true;
+  }
+
+  private versionOf<T extends { id: string; version?: number }>(items: T[], id: string, given?: number): number | undefined {
+    return given ?? items.find(item => item.id === id)?.version;
+  }
+
+  private newClientId(prefix: string): string {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  addProfessional(professional: Omit<ProfessionalUser, 'id'>): Promise<boolean> {
+    return this.save('POST', '/api/professionals', {
+      body: { ...professional, clientId: this.newClientId('prof') }
+    });
+  }
+
+  async updateProfessional(id: string, changes: Omit<ProfessionalUser, 'id' | 'avatar'>, avatar?: string, version?: number): Promise<boolean> {
+    const { password, ...fields } = changes;
+    const body = { ...fields, ...(avatar === undefined ? {} : { avatar: avatar || this.avatarFor(changes.name) }) };
+    const saved = await this.save('PATCH', `/api/professionals/${encodeURIComponent(id)}`, {
+      body, version: this.versionOf(this.professionals(), id, version)
+    });
+    if (!saved || !password) return saved;
+    return this.save('PUT', `/api/professionals/${encodeURIComponent(id)}/password`, { body: { password } });
+  }
+
+  async deleteProfessional(id: string, version?: number): Promise<boolean> {
+    if (this.professionals().length <= 1) {
+      this.notify('Mantenha ao menos um profissional cadastrado.', true);
       return false;
     }
+    return this.save('DELETE', `/api/professionals/${encodeURIComponent(id)}`, { version: this.versionOf(this.professionals(), id, version) });
+  }
+
+  addPatient(patient: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): Promise<boolean> {
+    return this.save('POST', '/api/patients', {
+      body: { ...patient, avatar: avatar || this.avatarFor(patient.name), clientId: this.newClientId('pat') }
+    });
+  }
+
+  async updatePatientRegistration(id: string, changes: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string, version?: number): Promise<boolean> {
+    const { password, ...fields } = changes;
+    const body = { ...fields, ...(avatar === undefined ? {} : { avatar: avatar || this.avatarFor(changes.name) }) };
+    const saved = await this.save('PATCH', `/api/patients/${encodeURIComponent(id)}`, {
+      body, version: this.versionOf(this.patients(), id, version)
+    });
+    if (!saved || !password) return saved;
+    return this.save('PUT', `/api/patients/${encodeURIComponent(id)}/password`, { body: { password } });
+  }
+
+  async deletePatient(id: string, version?: number): Promise<boolean> {
+    if (this.patients().length <= 1) {
+      this.notify('Mantenha ao menos um paciente cadastrado.', true);
+      return false;
+    }
+    const saved = await this.save('DELETE', `/api/patients/${encodeURIComponent(id)}`, { version: this.versionOf(this.patients(), id, version) });
+    if (saved && this.activePatientId() === id) this.activePatientId.set(this.patients()[0].id);
+    return saved;
+  }
+
+  // O servidor decide id, hora, autor e status: aqui só vão as medições do paciente.
+  async submitDailyCheckIn(patientId: string, data: Omit<DailyCheckIn, 'id'>, photo?: { imageUrl: string; patientNotes?: string }): Promise<boolean> {
+    const result = await this.call<{ patient: Patient }>('POST', '/api/checkins', {
+      body: {
+        id: this.newClientId('chk'),
+        patientId,
+        checkIn: data,
+        photo: photo ? { id: this.newClientId('wp'), imageUrl: photo.imageUrl, patientNotes: photo.patientNotes } : undefined
+      }
+    });
+    if (!result.ok) return false;
+    this.mergePatient(result.data.patient);
+    return true;
   }
 
   private mergePatient(patient: Patient): void {
     if (!this.token) return;
-    this.patientsState.update(patients => patients.map(item => item.id === patient.id ? patient : item));
+    this.patientsState.update(patients => patients.map(item => item.id === patient.id ? this.normalizePatient(patient) : item));
   }
 
-  private async confirmDoseAsPatient(patientId: string, medicationId: string, time: string): Promise<boolean> {
-    if (!this.token) return false;
-    try {
-      const response = await this.authFetch(this.apiUrl('/api/medication-taken'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ patientId, medicationId, time })
-      });
-      if (response.status === 401) {
-        await this.handleUnauthorized();
-        return false;
-      }
-      if (!response.ok) return false;
-      const result = await response.json() as { patient: Patient };
-      this.mergePatient(result.patient);
-      return true;
-    } catch {
-      return false;
-    }
+  async toggleMedicationTaken(patientId: string, medicationId: string, time: string): Promise<boolean> {
+    const result = await this.call<{ patient: Patient }>('POST', '/api/medication-taken', { body: { patientId, medicationId, time } });
+    if (!result.ok) return false;
+    this.mergePatient(result.data.patient);
+    return true;
   }
 
-  toggleMedicationTaken(patientId: string, medicationId: string, time: string): void {
-    if (this.currentRole() === 'patient') {
-      void this.confirmDoseAsPatient(patientId, medicationId, time);
-      return;
-    }
-    this.updatePatient(patientId, patient => {
-      const medications = patient.medications.map(medication => medication.id === medicationId
-        ? { ...medication, takenToday: { ...medication.takenToday, [time]: !medication.takenToday[time] } }
-        : medication);
-      const slots = medications.flatMap(medication => medication.times.map(item => medication.takenToday[item]));
-      const adherence = slots.length ? Math.round(slots.filter(Boolean).length / slots.length * 100) : 100;
-      return { ...patient, medications, medicationAdherencePercent: adherence };
+  addMedication(patientId: string, medication: Omit<MedicationItem, 'id' | 'takenToday' | 'version'>): Promise<boolean> {
+    return this.save('POST', `/api/patients/${encodeURIComponent(patientId)}/medications`, {
+      body: { ...medication, clientId: this.newClientId('med') }
     });
   }
 
-  addMedication(patientId: string, medication: Omit<MedicationItem, 'id' | 'takenToday'>): void {
-    this.updatePatient(patientId, patient => {
-      const medications = [...patient.medications, {
-        ...medication,
-        id: `med-${Date.now()}`,
-        takenToday: Object.fromEntries(medication.times.map(time => [time, false]))
-      }];
-      return { ...patient, medications, medicationAdherencePercent: this.medicationAdherence(medications) };
+  updateMedication(patientId: string, medicationId: string, changes: Omit<MedicationItem, 'id' | 'takenToday' | 'version'>, version?: number): Promise<boolean> {
+    const medications = this.patients().find(patient => patient.id === patientId)?.medications ?? [];
+    return this.save('PATCH', `/api/patients/${encodeURIComponent(patientId)}/medications/${encodeURIComponent(medicationId)}`, {
+      body: changes, version: this.versionOf(medications, medicationId, version)
     });
   }
 
-  updateMedication(patientId: string, medicationId: string, changes: Omit<MedicationItem, 'id' | 'takenToday'>): void {
-    this.updatePatient(patientId, patient => {
-      const medications = patient.medications.map(medication => medication.id === medicationId ? {
-        ...changes,
-        id: medication.id,
-        takenToday: Object.fromEntries(changes.times.map(time => [time, medication.takenToday[time] ?? false]))
-      } : medication);
-      return { ...patient, medications, medicationAdherencePercent: this.medicationAdherence(medications) };
+  deleteMedication(patientId: string, medicationId: string, version?: number): Promise<boolean> {
+    const medications = this.patients().find(patient => patient.id === patientId)?.medications ?? [];
+    return this.save('DELETE', `/api/patients/${encodeURIComponent(patientId)}/medications/${encodeURIComponent(medicationId)}`, {
+      version: this.versionOf(medications, medicationId, version)
     });
   }
 
-  deleteMedication(patientId: string, medicationId: string): void {
-    this.updatePatient(patientId, patient => {
-      const medications = patient.medications.filter(medication => medication.id !== medicationId);
-      return { ...patient, medications, medicationAdherencePercent: this.medicationAdherence(medications) };
+  addInstruction(patientId: string, instruction: Omit<PostOpInstruction, 'id' | 'version'>): Promise<boolean> {
+    return this.save('POST', `/api/patients/${encodeURIComponent(patientId)}/instructions`, {
+      body: { ...instruction, clientId: this.newClientId('inst') }
     });
   }
 
-  addInstruction(patientId: string, instruction: Omit<PostOpInstruction, 'id'>): void {
-    this.updatePatient(patientId, patient => ({
-      ...patient,
-      instructions: [...patient.instructions, { ...instruction, id: `inst-${Date.now()}` }]
-    }));
-  }
-
-  updateInstruction(patientId: string, instructionId: string, changes: Omit<PostOpInstruction, 'id'>): void {
-    this.updatePatient(patientId, patient => ({
-      ...patient,
-      instructions: patient.instructions.map(instruction => instruction.id === instructionId
-        ? { ...changes, id: instruction.id }
-        : instruction)
-    }));
-  }
-
-  deleteInstruction(patientId: string, instructionId: string): void {
-    this.updatePatient(patientId, patient => ({
-      ...patient,
-      instructions: patient.instructions.filter(instruction => instruction.id !== instructionId)
-    }));
-  }
-
-  uploadWoundPhoto(patientId: string, imageUrl: string, patientNotes?: string): Promise<boolean> {
-    return this.updatePatient(patientId, patient => {
-      const now = new Date();
-      const photo: WoundPhoto = {
-        id: `wp-${Date.now()}`,
-        date: this.date(now),
-        dayLabel: `D+${patient.postOpDay}`,
-        imageUrl,
-        patientNotes,
-        reviewStatus: 'pendente'
-      };
-      return {
-        ...patient,
-        woundPhotos: [photo, ...patient.woundPhotos],
-        woundReviewPending: true,
-        timeline: [...patient.timeline, {
-          id: `tl-${Date.now()}`,
-          date: `${this.date(now)} ${this.time(now)}`,
-          dayLabel: photo.dayLabel,
-          title: 'Nova Foto da Ferida Cirúrgica Enviada',
-          description: patientNotes || 'Registro fotográfico enviado para avaliação.',
-          author: `${patient.name} (Paciente)`,
-          type: 'curativo'
-        }]
-      };
+  updateInstruction(patientId: string, instructionId: string, changes: Omit<PostOpInstruction, 'id' | 'version'>, version?: number): Promise<boolean> {
+    const instructions = this.patients().find(patient => patient.id === patientId)?.instructions ?? [];
+    return this.save('PATCH', `/api/patients/${encodeURIComponent(patientId)}/instructions/${encodeURIComponent(instructionId)}`, {
+      body: changes, version: this.versionOf(instructions, instructionId, version)
     });
   }
 
-  reviewWoundPhoto(patientId: string, photoId: string, status: WoundPhoto['reviewStatus'], feedback: string): void {
-    if (status === 'pendente') return;
-    this.updatePatient(patientId, patient => {
-      const now = new Date();
-      const woundPhotos = patient.woundPhotos.map(photo => photo.id === photoId ? {
-        ...photo,
-        reviewStatus: status,
-        reviewFeedback: feedback,
-        reviewedBy: this.professionalUser().name,
-        reviewedAt: `${this.date(now)} às ${this.time(now)}`
-      } : photo);
-      return {
-        ...patient,
-        woundPhotos,
-        woundReviewPending: woundPhotos.some(photo => this.isRealWoundPhoto(photo) && photo.reviewStatus === 'pendente'),
-        timeline: [...patient.timeline, {
-          id: `tl-${Date.now()}`,
-          date: `${this.date(now)} ${this.time(now)}`,
-          dayLabel: `D+${patient.postOpDay}`,
-          title: status === 'avaliado_adequado' ? 'Cicatrização aprovada' : 'Ferida requer atenção',
-          description: feedback,
-          author: this.professionalUser().name,
-          type: 'curativo'
-        }]
-      };
+  deleteInstruction(patientId: string, instructionId: string, version?: number): Promise<boolean> {
+    const instructions = this.patients().find(patient => patient.id === patientId)?.instructions ?? [];
+    return this.save('DELETE', `/api/patients/${encodeURIComponent(patientId)}/instructions/${encodeURIComponent(instructionId)}`, {
+      version: this.versionOf(instructions, instructionId, version)
+    });
+  }
+
+  reviewWoundPhoto(patientId: string, photoId: string, status: WoundPhoto['reviewStatus'], feedback: string): Promise<boolean> {
+    if (status === 'pendente') return Promise.resolve(false);
+    return this.save('PUT', `/api/patients/${encodeURIComponent(patientId)}/wound-photos/${encodeURIComponent(photoId)}/review`, {
+      body: { status, feedback }
     });
   }
 
@@ -451,7 +332,7 @@ export class VivaceService {
     const message: ChatMessage = {
       id: `msg-${crypto.randomUUID()}`,
       sender,
-      senderName: sender === 'equipe' ? this.professionalUser().name : patient.name,
+      senderName: sender === 'equipe' ? (this.sessionName() || this.professionalUser().name) : patient.name,
       timestamp: this.time(new Date()),
       text: messageText,
       isRead: false
@@ -485,32 +366,16 @@ export class VivaceService {
     }
   }
 
-  addClinicalNote(patientId: string, text: string): void {
+  addClinicalNote(patientId: string, text: string): Promise<boolean> {
     const noteText = text.trim();
-    if (!noteText) return;
-    this.updatePatient(patientId, patient => ({
-      ...patient,
-      clinicalNotes: [{
-        id: `cn-${Date.now()}`,
-        author: this.professionalUser().name,
-        date: `${this.date(new Date())} ${this.time(new Date())}`,
-        text: noteText
-      }, ...patient.clinicalNotes]
-    }));
+    if (!noteText) return Promise.resolve(false);
+    return this.save('POST', `/api/patients/${encodeURIComponent(patientId)}/clinical-notes`, {
+      body: { text: noteText, clientId: this.newClientId('cn') }
+    });
   }
 
-  updatePatientStatus(patientId: string, status: AlertSeverity): void {
-    this.updatePatient(patientId, patient => ({ ...patient, status }));
-  }
-
-  private updatePatient(patientId: string, updater: (patient: Patient) => Patient): Promise<boolean> {
-    this.patientsState.update(patients => patients.map(patient => patient.id === patientId ? updater(patient) : patient));
-    return this.saveSharedState();
-  }
-
-  private medicationAdherence(medications: MedicationItem[]): number {
-    const slots = medications.flatMap(medication => medication.times.map(time => medication.takenToday[time]));
-    return slots.length ? Math.round(slots.filter(Boolean).length / slots.length * 100) : 100;
+  updatePatientStatus(patientId: string, status: AlertSeverity): Promise<boolean> {
+    return this.save('PUT', `/api/patients/${encodeURIComponent(patientId)}/status`, { body: { status } });
   }
 
   private avatarFor(name: string): string {
@@ -523,12 +388,8 @@ export class VivaceService {
     return patients.map(patient => patient.surgeon === defaultSurgeon ? { ...patient, surgeon: updatedSurgeon } : patient);
   }
 
-  private async loadSharedState(initialize = true): Promise<void> {
-    if (!this.token || this.pendingSaves > 0) return;
-    if (this.hasUnsavedChanges) {
-      await this.saveSharedState();
-      return;
-    }
+  private async loadSharedState(): Promise<void> {
+    if (!this.token) return;
     const requestToken = this.token;
     try {
       const response = await this.authFetch(this.apiUrl());
@@ -538,10 +399,6 @@ export class VivaceService {
       if (this.token !== requestToken) return;
       if (response.status === 401) {
         await this.handleUnauthorized();
-        return;
-      }
-      if (response.status === 204) {
-        if (initialize) await this.saveSharedState();
         return;
       }
       if (!response.ok) return;
@@ -561,60 +418,11 @@ export class VivaceService {
         this.adminsState.set(state.admins);
       }
     } catch {
-      // Local storage keeps the application available when the shared API is offline.
+      // Sem a API, a tela fica com o último estado carregado.
     }
   }
 
-  private saveSharedState(): Promise<boolean> {
-    if (!this.token || this.currentRole() === 'patient') return Promise.resolve(false);
-    this.stateRevision++;
-    this.hasUnsavedChanges = true;
-    this.storeSyncPending(true);
-    this.pendingSaves++;
-    const operation = this.saveQueue.then(async () => {
-      const revision = this.stateRevision;
-      try {
-        const response = await this.authFetch(this.apiUrl(), {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            patients: this.patients(),
-            professionals: this.professionals(),
-            admins: this.admins()
-          })
-        });
-        if (response.status === 401) {
-          await this.handleUnauthorized();
-          return false;
-        }
-        if (response.status === 403) return false;
-        // 409: o servidor recusou o salvamento porque o estado local não bate com o dele
-        // (por exemplo, apagaria vários pacientes de uma vez). Repetir o mesmo corpo a
-        // cada 3 segundos nunca resolveria: descarta a alteração pendente e recarrega.
-        if (response.status === 409) {
-          this.hasUnsavedChanges = false;
-          this.storeSyncPending(false);
-          void this.loadSharedState(false);
-          return false;
-        }
-        if (!response.ok) return false;
-        if (this.stateRevision === revision) {
-          this.hasUnsavedChanges = false;
-          this.storeSyncPending(false);
-        }
-        return true;
-      } catch {
-        return false;
-      } finally {
-        this.pendingSaves--;
-      }
-    });
-    this.saveQueue = operation.then(() => undefined);
-    return operation;
-  }
-
   private async handleUnauthorized(): Promise<void> {
-    this.storeSyncPending(false);
     await this.logout();
   }
 
@@ -711,11 +519,9 @@ export class VivaceService {
   }
 
   // Logout e 401: o prontuário sai da memória e do navegador. Sem isso, o próximo
-  // usuário do mesmo computador herdava o cache, e a marca "há alteração a
-  // enviar" podia mandar o estado de outra pessoa na sessão seguinte.
+  // usuário do mesmo computador herdava o cache.
   private clearClinicalData(): void {
-    this.stateRevision++;
-    this.hasUnsavedChanges = false;
+    this.notice.set(null);
     this.patientsState.set(structuredClone(INITIAL_PATIENTS).map(patient => this.normalizePatient(patient)));
     this.professionalsState.set([structuredClone(CURRENT_PROFESSIONAL)]);
     this.adminsState.set([structuredClone(CURRENT_ADMIN)]);
@@ -777,23 +583,6 @@ export class VivaceService {
     }
   }
 
-  private loadSyncPending(): boolean {
-    try {
-      return sessionStorage.getItem(SYNC_PENDING_STORAGE_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  }
-
-  private storeSyncPending(pending: boolean): void {
-    try {
-      if (pending) sessionStorage.setItem(SYNC_PENDING_STORAGE_KEY, 'true');
-      else sessionStorage.removeItem(SYNC_PENDING_STORAGE_KEY);
-    } catch {
-      // In-memory retries still protect the current session when storage is unavailable.
-    }
-  }
-
   private normalizePatient(patient: Patient): Patient {
     return {
       ...patient,
@@ -819,10 +608,6 @@ export class VivaceService {
     } catch {
       // The current session still works when browser storage is unavailable.
     }
-  }
-
-  private date(value: Date): string {
-    return value.toLocaleDateString('pt-BR');
   }
 
   private time(value: Date): string {

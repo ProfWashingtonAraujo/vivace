@@ -29,7 +29,6 @@ export class PatientPortalComponent {
   readonly photoError = signal('');
   readonly processingPhoto = signal(false);
   readonly savingCheckIn = signal(false);
-  readonly checkInPendingSync = signal(false);
   readonly sendingMessage = signal(false);
   readonly messageError = signal('');
   readonly patient = this.vivace.selectedPatient;
@@ -99,15 +98,9 @@ export class PatientPortalComponent {
     if (!patient || this.savingCheckIn()) return;
     this.savingCheckIn.set(true);
     this.photoError.set('');
-    if (this.checkInPendingSync()) {
-      const saved = await this.vivace.syncPendingChanges();
-      this.finishSavingCheckIn(saved);
-      return;
-    }
     const photo = this.photoUrl()
       ? { imageUrl: this.photoUrl(), patientNotes: this.photoNotes || this.notes }
       : undefined;
-    if (photo && this.vivace.currentRole() !== 'patient') void this.vivace.uploadWoundPhoto(patient.id, photo.imageUrl, photo.patientNotes);
     const saved = await this.vivace.submitDailyCheckIn(patient.id, {
       date: new Date().toLocaleDateString('pt-BR'),
       dayLabel: `D+${patient.postOpDay}`,
@@ -125,11 +118,9 @@ export class PatientPortalComponent {
   private finishSavingCheckIn(saved: boolean): void {
     this.savingCheckIn.set(false);
     if (!saved) {
-      this.checkInPendingSync.set(true);
-      this.photoError.set('O check-in ficou salvo neste dispositivo, mas ainda não foi sincronizado. O sistema tentará novamente automaticamente.');
+      this.photoError.set('Não foi possível enviar o check-in. Verifique a conexão e tente novamente.');
       return;
     }
-    this.checkInPendingSync.set(false);
     this.photoUrl.set('');
     this.photoName.set('');
     this.photoNotes = '';

@@ -30,6 +30,7 @@ export class PatientManagementComponent {
   readonly feedbackMessage = signal('');
   readonly feedbackError = signal(false);
   readonly editingPatientId = signal<string | null>(null);
+  private editingPatientVersion?: number;
   readonly formOpen = signal(false);
   readonly searchQuery = signal('');
   readonly filteredPatients = computed(() => {
@@ -63,12 +64,11 @@ export class PatientManagementComponent {
       const editingId = this.editingPatientId();
       const { passwordConfirmation: _, ...patient } = this.patientModel();
       const saved = editingId
-        ? await this.vivace.updatePatientRegistration(editingId, patient, this.patientAvatar())
+        ? await this.vivace.updatePatientRegistration(editingId, patient, this.patientAvatar(), this.editingPatientVersion)
         : await this.vivace.addPatient(patient, this.patientAvatar());
+      if (!saved) return; // o aviso do motivo vem do serviço; o formulário fica aberto
       this.cancelPatientEdit();
-      this.showFeedback(saved
-        ? editingId ? 'Paciente atualizado com sucesso.' : 'Paciente cadastrado com sucesso.'
-        : 'Cadastro salvo neste dispositivo e aguardando sincronização.', !saved);
+      this.showFeedback(editingId ? 'Paciente atualizado com sucesso.' : 'Paciente cadastrado com sucesso.');
     });
   }
 
@@ -88,6 +88,7 @@ export class PatientManagementComponent {
   editPatient(patient: Patient): void {
     this.formOpen.set(true);
     this.editingPatientId.set(patient.id);
+    this.editingPatientVersion = patient.version;
     this.patientModel.set({
       name: patient.name,
       age: patient.age,
@@ -140,12 +141,9 @@ export class PatientManagementComponent {
     }
   }
 
-  deletePatient(patient: Patient): void {
+  async deletePatient(patient: Patient): Promise<void> {
     if (!window.confirm(`Excluir o cadastro de ${patient.name}?`)) return;
-    if (!this.vivace.deletePatient(patient.id)) {
-      this.showFeedback('Mantenha ao menos um paciente cadastrado.', true);
-      return;
-    }
+    if (!await this.vivace.deletePatient(patient.id, patient.version)) return;
     if (this.editingPatientId() === patient.id) this.cancelPatientEdit();
     this.showFeedback('Paciente excluído com sucesso.');
   }

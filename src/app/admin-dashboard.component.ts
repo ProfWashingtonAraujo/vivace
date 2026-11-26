@@ -25,6 +25,7 @@ export class AdminDashboardComponent {
   readonly feedbackMessage = signal('');
   readonly feedbackError = signal(false);
   readonly editingProfessionalId = signal<string | null>(null);
+  private editingProfessionalVersion?: number;
   readonly formOpen = signal(false);
   readonly searchQuery = signal('');
   readonly filteredProfessionals = computed(() => {
@@ -53,15 +54,14 @@ export class AdminDashboardComponent {
       const { passwordConfirmation: _, ...professional } = this.professionalModel();
       const editingId = this.editingProfessionalId();
       const saved = editingId
-        ? await this.vivace.updateProfessional(editingId, professional, this.professionalAvatar())
+        ? await this.vivace.updateProfessional(editingId, professional, this.professionalAvatar(), this.editingProfessionalVersion)
         : await this.vivace.addProfessional({
           ...professional,
           avatar: this.professionalAvatar() || `https://ui-avatars.com/api/?name=${encodeURIComponent(professional.name)}&background=0B5CAB&color=ffffff`
         });
+      if (!saved) return; // o aviso do motivo vem do serviço; o formulário fica aberto
       this.cancelProfessionalEdit();
-      this.showFeedback(saved
-        ? editingId ? 'Profissional atualizado com sucesso.' : 'Profissional cadastrado com sucesso.'
-        : 'Cadastro salvo neste dispositivo e aguardando sincronização.', !saved);
+      this.showFeedback(editingId ? 'Profissional atualizado com sucesso.' : 'Profissional cadastrado com sucesso.');
     });
   }
 
@@ -73,6 +73,7 @@ export class AdminDashboardComponent {
   editProfessional(professional: ProfessionalUser): void {
     this.formOpen.set(true);
     this.editingProfessionalId.set(professional.id);
+    this.editingProfessionalVersion = professional.version;
     this.professionalModel.set({
       name: professional.name,
       email: professional.email,
@@ -120,12 +121,9 @@ export class AdminDashboardComponent {
     }
   }
 
-  deleteProfessional(professional: ProfessionalUser): void {
+  async deleteProfessional(professional: ProfessionalUser): Promise<void> {
     if (!window.confirm(`Excluir o cadastro de ${professional.name}?`)) return;
-    if (!this.vivace.deleteProfessional(professional.id)) {
-      this.showFeedback('Mantenha ao menos um profissional cadastrado.', true);
-      return;
-    }
+    if (!await this.vivace.deleteProfessional(professional.id, professional.version)) return;
     if (this.editingProfessionalId() === professional.id) this.cancelProfessionalEdit();
     this.showFeedback('Profissional excluído com sucesso.');
   }

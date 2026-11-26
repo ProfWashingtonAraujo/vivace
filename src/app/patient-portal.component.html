@@ -63,7 +63,7 @@
               @if (photoError()) {<p role="alert" class="mt-2 text-xs font-bold text-[#BE123C]">{{ photoError() }}</p>}
             </fieldset>
             <fieldset class="form-section"><legend>6. Recado para a equipe</legend><textarea name="notes" [(ngModel)]="notes" rows="3" class="w-full p-3 bg-white border border-[#D9E2EC] rounded-xl text-sm" placeholder="Conte qualquer dúvida ou sensação..."></textarea></fieldset>
-            <button [disabled]="savingCheckIn()" class="w-full py-4 bg-[#0B5CAB] text-white text-sm font-bold rounded-2xl disabled:opacity-60">{{ savingCheckIn() ? 'Salvando...' : checkInPendingSync() ? 'Tentar sincronizar novamente' : 'Concluir e enviar check-in' }}</button>
+            <button [disabled]="savingCheckIn()" class="w-full py-4 bg-[#0B5CAB] text-white text-sm font-bold rounded-2xl disabled:opacity-60">{{ savingCheckIn() ? 'Salvando...' : 'Concluir e enviar check-in' }}</button>
           </form>
         </section>
       }
