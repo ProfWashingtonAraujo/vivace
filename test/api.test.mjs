@@ -1977,6 +1977,7 @@ describe('Saturacao no check-in e reabertura do check-in pela equipe', () => {
     await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-first', { spo2: 96 }) });
     const result = await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-none') });
     assert.equal(result.status, 201);
+    assert.equal(result.body.patient.status, 'estavel', 'sem oximetro o paciente nao pode virar critico');
     assert.equal(result.body.patient.checkIns[0].spo2, null);
     assert.equal(result.body.patient.currentSpo2, 96);
   });

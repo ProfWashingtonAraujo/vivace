@@ -47,11 +47,13 @@ const medicationAdherence = medications => {
 // Saturacao: abaixo de 90% e critica, de 90 a 94% pede atencao. Pressao: 180/120 ou mais, ou
 // abaixo de 90/60, e critica; 140/90 ou mais pede atencao. Sem aparelho (null), nao conta.
 const severityFor = checkIn => {
-  const { systolic, diastolic } = checkIn;
+  const { systolic, diastolic, spo2 } = checkIn;
   const hasPressure = systolic != null && diastolic != null;
-  if (checkIn.painLevel >= 7 || checkIn.temperature >= 37.8 || checkIn.spo2 < 90
+  // Cuidado: `null < 90` e verdadeiro em JavaScript, por isso a saturacao so conta quando existe.
+  const hasSpo2 = spo2 != null;
+  if (checkIn.painLevel >= 7 || checkIn.temperature >= 37.8 || (hasSpo2 && spo2 < 90)
     || (hasPressure && (systolic >= 180 || diastolic >= 120 || systolic < 90 || diastolic < 60))) return 'critico';
-  if (checkIn.painLevel >= 4 || checkIn.temperature >= 37.3 || checkIn.spo2 < 95
+  if (checkIn.painLevel >= 4 || checkIn.temperature >= 37.3 || (hasSpo2 && spo2 < 95)
     || (hasPressure && (systolic >= 140 || diastolic >= 90))) return 'atencao';
   return 'estavel';
 };
