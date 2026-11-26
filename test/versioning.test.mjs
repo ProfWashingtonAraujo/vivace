@@ -15,7 +15,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readAggregate } from '../db/aggregate.mjs';
 import { createPool, withSession } from '../db/session.mjs';
-import { putState } from '../db/store.mjs';
+import { updateMedication } from '../db/store.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pool = createPool();
@@ -187,23 +187,12 @@ describe('a leitura entrega a versao', () => {
 });
 
 describe('o PUT nao mexe nas versoes sem mudanca real', () => {
-  it('salvar o mesmo estado de novo nao muda nenhuma versao', async () => {
-    // O primeiro salvamento pode normalizar um rotulo (surgeon_label recebe o nome
-    // exibido do cirurgiao); a partir dai o estado esta estavel.
-    await putState(admin, await readState());
-    const antes = await snapshot();
-    await putState(admin, await readState());
-    assert.deepEqual(await snapshot(), antes);
-  });
-
-  it('alterar so uma medicacao pelo PUT sobe so a versao dela', async () => {
-    await putState(admin, await readState());
+  it('alterar so uma medicacao sobe so a versao dela', async () => {
     const antes = await snapshot();
     const state = await readState();
     const patient = state.patients.find(item => item.id === 'pat-1');
     const alvo = patient.medications[0];
-    alvo.name = `${alvo.name} (via PUT)`;
-    await putState(admin, state);
+    await updateMedication(admin, { patientId: 'pat-1', medicationId: alvo.id, values: { name: `${alvo.name} (editada)` }, version: alvo.version });
 
     const depois = await snapshot();
     const chave = `pat-1/${alvo.id}`;

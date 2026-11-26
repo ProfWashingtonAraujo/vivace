@@ -71,8 +71,6 @@ A filtragem não está mais no JavaScript. `GET /api/state` consulta tudo e devo
 - Profissional só vê o paciente de cuja equipe faz parte. Um paciente **sem equipe** só é visível ao admin (e ao próprio paciente); antes da migração `018`, qualquer profissional o via (veja "Visibilidade e equipe do paciente").
 - Paciente não vê nota clínica, nem a própria. `/api/checkins` devolvia o paciente inteiro com `clinicalNotes` para quem tem papel de paciente; agora a linha simplesmente não aparece.
 
-O `PUT /api/state` ficou mais simples do que a versão em JS. O corpo chega inteiro e cada coleção é reescrita na ordem do array, apagando o que não veio. O que protege um profissional de apagar o prontuário dos colegas é o RLS: apagar uma linha invisível simplesmente não apaga nada. Antes isso exigia reinserir na mão a lista de pacientes proibidos (`rejectForeignPatients`).
-
 As policies também corrigem um bug real: profissional passa a ver **apenas o próprio cadastro**, porque `professionalUser()` no frontend é `professionals()[0]` e, com todos visíveis, uma sessão do profissional #2 gravava o nome do #1 em `reviewedBy`, no autor da nota e no chat. O painel administrativo continua vendo todos, por ser papel `admin`.
 
 ### Escrita por papel (migração 015)
@@ -171,7 +169,6 @@ Toda rota exige um token de sessão (`Authorization: Bearer <token>`), emitido p
 | --- | --- | --- |
 | `POST /api/auth/login` | público | público |
 | `GET /api/state` | todos os pacientes | apenas o próprio registro, sem notas clínicas |
-| `PUT /api/state` | permitido | `403` |
 | `POST /api/messages` | envia como `equipe` | envia como `paciente`, apenas para si mesmo |
 | `GET /api/events` | eventos dos pacientes da equipe (mesma regra do RLS) | apenas os próprios eventos |
 
@@ -189,21 +186,13 @@ No primeiro acesso a API cria a conta de administração inicial. Ao entrar como
 
 ### Tamanho de corpo, fotos e erros
 
-Cada rota tem o próprio teto de corpo: login 4 KB, mensagem 16 KB, confirmação de medicação 4 KB, check-in com foto 8 MB e `PUT /api/state` 25 MB. Passar do teto responde `413`, e JSON inválido responde `400` (antes ambos viravam `500`). A foto de um check-in precisa ser JPEG, PNG ou WebP de verdade, conferida pelos bytes iniciais do arquivo e não só pelo tipo declarado, com até 6 MB depois de decodificada; SVG e texto disfarçado de imagem são recusados com `400`. Campos curtos (`mood`, `dayLabel`, `mobilityScore`, `senderName`, ids e cada sintoma) aceitam até 100 caracteres.
-
-O `PUT /api/state` do administrador não pode deixar o sistema sem administrador: uma lista de `admins` vazia ou ausente responde `400`.
+Cada rota tem o próprio teto de corpo: login 4 KB, mensagem 16 KB, confirmação de medicação 4 KB, check-in com foto 8 MB. Passar do teto responde `413`, e JSON inválido responde `400` (antes ambos viravam `500`). A foto de um check-in precisa ser JPEG, PNG ou WebP de verdade, conferida pelos bytes iniciais do arquivo e não só pelo tipo declarado, com até 6 MB depois de decodificada; SVG e texto disfarçado de imagem são recusados com `400`. Campos curtos (`mood`, `dayLabel`, `mobilityScore`, `senderName`, ids e cada sintoma) aceitam até 100 caracteres.
 
 Qualquer erro que escape de uma rota, como uma falha de banco ao consultar a sessão, responde `500` e o processo continua de pé. Ainda não existe cota diária de check-ins ou fotos por paciente, porque a tabela `check_ins` não guarda a hora de criação.
 
-### Salvamento do estado (`PUT /api/state`)
+### Gravações (fase 4: o `PUT /api/state` foi removido)
 
-O `PUT` ainda é o caminho que a equipe usa para salvar edições, e ele reescreve o estado a partir do que o cliente tinha na tela. Isso gera dois riscos que estão sendo fechados em fases (plano de escritas granulares). A **fase 0** já vale:
-
-- **Nada que outra pessoa criou some.** Check-ins, fotos da ferida, linha do tempo e notas clínicas só são acrescentados ou atualizados pelo `PUT`, nunca apagados: antes, um check-in ou foto que o paciente enviasse depois da última leitura da equipe era apagado no salvamento seguinte, porque não vinha no corpo. A posição de um item que já existe não é reescrita, e um item novo entra no lado certo da lista (no início para check-ins, fotos e notas; no fim para a linha do tempo).
-- **Mensagens: o `PUT` só marca como lida.** Texto, remetente e nome nunca vêm do corpo, e o `PUT` não cria mensagens; elas nascem em `POST /api/messages`, onde o remetente sai da sessão. Uma mensagem lida também não volta a não lida por um estado velho.
-- **Exclusão em massa recusada.** Um salvamento que apagaria mais de um paciente de uma vez responde `409` e não grava nada. A tela apaga um paciente por vez, então isso só acontece com estado velho ou lista vazia. O front, ao receber `409`, descarta a alteração pendente e recarrega do servidor.
-
-Medicações e instruções continuam sendo apagadas pelo `PUT` (há tela para isso); a troca por endpoints próprios, com controle de versão, é a fase 2. O botão "Restaurar dados de demonstração" foi removido: ele substituía o prontuário de todos os aparelhos conectados pelos dados de exemplo do bundle.
+Não existe mais rota que grave o estado inteiro: `PUT /api/state` responde `405`, e só o `GET /api/state` continua. Toda alteração tem endpoint próprio, com a regra de quem pode, a validação e o controle de versão (`If-Match`) descritos nas seções das áreas 1 a 5. Com isso, um salvamento com tela velha não apaga o que outra pessoa criou, e autor, data e id sempre saem do servidor. O front grava por essas chamadas, sem fila de sincronização: se o servidor recusa ou há conflito (`409`), a tela avisa e recarrega. O botão "Restaurar dados de demonstração" também não existe mais.
 
 ### Integração contínua
 
@@ -214,7 +203,7 @@ Medicações e instruções continuam sendo apagadas pelo `PUT` (há tela para i
 Antes da migração `018` a regra era "profissional da equipe **ou** paciente sem equipe": enquanto um paciente não tinha ninguém atribuído, qualquer profissional o via e podia, por exemplo, redefinir a senha dele. Era uma regra que falhava aberta: tirar a última pessoa da equipe, ou criar um paciente sem equipe, abria o prontuário a todos. Agora:
 
 - **O profissional só vê o paciente de cuja equipe faz parte.** Paciente sem equipe só é visível ao admin e ao próprio paciente. O mesmo vale para o stream de eventos.
-- **Quem cria um paciente entra na equipe dele** como cirurgião, por um gatilho no próprio `INSERT` (`app_join_team_on_create`). Sem isso o criador não veria o que acabou de criar, e a criação pela tela atual (`PUT /api/state`) quebraria. O gatilho só dispara na criação e usa o usuário da sessão, nunca um id vindo de fora: **ninguém consegue "assumir" um paciente que ficou sem equipe** (a policy de `patient_care_team` continua exigindo acesso ao paciente).
+- **Quem cria um paciente entra na equipe dele** como cirurgião, por um gatilho no próprio `INSERT` (`app_join_team_on_create`). Sem isso o criador não veria o que acabou de criar, e a criação de paciente quebraria. O gatilho só dispara na criação e usa o usuário da sessão, nunca um id vindo de fora: **ninguém consegue "assumir" um paciente que ficou sem equipe** (a policy de `patient_care_team` continua exigindo acesso ao paciente).
 - **O admin cria sem equipe** e atribui depois; criar como admin não coloca ninguém na equipe.
 - **Os dados existentes:** quem estava sem equipe na hora da migração ganhou uma equipe explícita, com todos os profissionais cadastrados (papel `equipe`), para ninguém perder acesso por causa da mudança. Na demonstração, que tem um profissional, o `pat-2` passou a ter o `prof-1` na equipe, e o cirurgião que aparece na tela continua o do rótulo (`Dr. Marcos Albuquerque`): só quem tem papel `cirurgiao` substitui o rótulo guardado (`lib/surgeon.mjs`).
 - **Semente e import:** `db/seed/demo-state.json` traz `careTeam: ["prof-1"]` no `pat-2`, e o import aceita `careTeam` (lista de ids, papel `equipe`) para dar equipe a um paciente cujo cirurgião responsável não tem cadastro. Se o seu `.data/vivace-state.json` local tiver um paciente nesse caso, acrescente `careTeam`, ou ele ficará visível só ao admin.
@@ -312,7 +301,7 @@ A verificação de validade está no próprio SQL (`expires_at > now()`), então
 
 ### Limite de requisições
 
-O bloqueio do login não protege o resto da API: um token válido, mesmo vazado, fazia `GET /api/state` e `PUT /api/state` sem limite, e o `PUT` reescreve o prontuário inteiro. Hoje existe cota **por sessão e por IP**, em janela fixa (`VIVACE_RATE_WINDOW_MS`, padrão 60s), com `VIVACE_RATE_SESSION_MAX` (120) e `VIVACE_RATE_IP_MAX` (300). Estourar devolve `429` com `Retry-After`.
+O bloqueio do login não protege o resto da API: um token válido, mesmo vazado, fazia chamadas sem limite. Hoje existe cota **por sessão e por IP**, em janela fixa (`VIVACE_RATE_WINDOW_MS`, padrão 60s), com `VIVACE_RATE_SESSION_MAX` (120) e `VIVACE_RATE_IP_MAX` (300). Estourar devolve `429` com `Retry-After`.
 
 A cota por IP é de propósito bem maior que a de sessão: um consultório inteiro sai por um único endereço NAT, e um teto apertado derrubaria todo mundo atrás do mesmo roteador junto. O risco conhecido é o oposto do bloqueio de login — o limite de IP também é um vetor de negação de serviço, e um atacante atrás do mesmo NAT pode trancar a equipe. É a troca padrão, e o valor é configurável.
 
