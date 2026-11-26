@@ -203,7 +203,7 @@ export const professionalOf = row => ({
   version: row.version
 });
 
-export const adminOf = row => ({ id: row.id, name: row.name, email: row.email, version: row.version });
+export const adminOf = row => ({ id: row.id, name: row.name, email: row.email, isSuper: row.is_super === true, version: row.version });
 
 export const readAggregate = async client => ({
   patients: await readPatients(client),

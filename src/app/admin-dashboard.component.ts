@@ -6,6 +6,7 @@ import { VivaceService } from './vivace.service';
 interface AdminFormModel {
   name: string;
   email: string;
+  isSuper: boolean;
   password: string;
   passwordConfirmation: string;
 }
@@ -156,7 +157,7 @@ export class AdminDashboardComponent {
     this.adminFormOpen.set(true);
     this.editingAdminId.set(admin.id);
     this.editingAdminVersion = admin.version;
-    this.adminModel.set({ name: admin.name, email: admin.email, password: '', passwordConfirmation: '' });
+    this.adminModel.set({ name: admin.name, email: admin.email, isSuper: admin.isSuper === true, password: '', passwordConfirmation: '' });
   }
 
   cancelAdminEdit(): void {
@@ -168,14 +169,15 @@ export class AdminDashboardComponent {
   saveAdmin(event: Event): void {
     event.preventDefault();
     const id = this.editingAdminId();
-    const { name, email, password, passwordConfirmation } = this.adminModel();
+    const { name, email, isSuper, password, passwordConfirmation } = this.adminModel();
     if (!name.trim() || !email.trim()) {
       this.showFeedback('Informe o nome e o e-mail do administrador.', true);
       return;
     }
     if (!this.passwordIsValid(password, passwordConfirmation, !id)) return;
     void submit(this.adminForm, async () => {
-      const values = { name: name.trim(), email: email.trim(), password };
+      // Quem não é super não manda `isSuper`: o servidor recusa a tentativa de se promover.
+      const values = { name: name.trim(), email: email.trim(), password, ...(this.vivace.isSuperAdmin() ? { isSuper } : {}) };
       const saved = id
         ? await this.vivace.updateAdmin(id, values, this.editingAdminVersion)
         : await this.vivace.addAdmin(values);
@@ -208,7 +210,7 @@ export class AdminDashboardComponent {
   }
 
   private emptyAdmin(): AdminFormModel {
-    return { name: '', email: '', password: '', passwordConfirmation: '' };
+    return { name: '', email: '', isSuper: false, password: '', passwordConfirmation: '' };
   }
 
   private showFeedback(message: string, error = false): void {

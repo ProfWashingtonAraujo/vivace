@@ -4,6 +4,7 @@ export const CURRENT_ADMIN: AdminUser = {
   id: 'adm-1',
   name: 'Administrador',
   email: 'admin@vivace.med.br',
+  isSuper: true,
   password: 'vivace-demo'
 };
 

@@ -1754,6 +1754,46 @@ describe('Fase 2 / area 4: administradores', () => {
   });
 });
 
+describe('Super administrador', () => {
+  it('so o super cria, apaga e promove administradores; o admin comum edita so a propria conta', async () => {
+    const root = (await login('admin@vivace.med.br')).token;
+    assert.equal((await staffState(root)).admins.find(item => item.id === 'adm-1').isSuper, true);
+
+    const body = newAdmin();
+    const { admin: common } = (await api('POST', '/api/admins', root, body)).body;
+    assert.equal(common.isSuper, false, 'quem nasce sem pedir nao e super');
+    const commonToken = (await loginAs(body.email, body.password, '10.9.5.1')).body.token;
+
+    assert.equal((await api('POST', '/api/admins', commonToken, newAdmin())).status, 403);
+    assert.equal((await api('DELETE', `/api/admins/${common.id}`, commonToken, undefined, common.version)).status, 403);
+    assert.equal((await api('PATCH', '/api/admins/adm-1', commonToken, { name: 'invadido' }, 1)).status, 403);
+    assert.equal((await api('PUT', '/api/admins/adm-1/password', commonToken, { password: 'senha-invasora-1' })).status, 403);
+    assert.equal((await api('PATCH', `/api/admins/${common.id}`, commonToken, { isSuper: true }, common.version)).status, 403, 'ninguem se promove');
+
+    const own = await api('PATCH', `/api/admins/${common.id}`, commonToken, { name: 'Eu mesmo' }, common.version);
+    assert.equal(own.status, 200, JSON.stringify(own.body));
+    assert.equal((await api('PUT', `/api/admins/${common.id}/password`, commonToken, { password: 'minha-senha-nova-1' })).status, 200);
+
+    const promoted = await api('PATCH', `/api/admins/${common.id}`, root, { isSuper: true }, own.body.admin.version);
+    assert.equal(promoted.status, 200, JSON.stringify(promoted.body));
+    assert.equal(promoted.body.admin.isSuper, true);
+    assert.equal((await api('DELETE', `/api/admins/${common.id}`, root, undefined, promoted.body.admin.version)).status, 200);
+  });
+
+  it('nunca fica sem super admin: nao apaga nem rebaixa o ultimo', async () => {
+    const root = (await login('admin@vivace.med.br')).token;
+    const { admins } = await staffState(root);
+    const supers = admins.filter(item => item.isSuper);
+    assert.equal(supers.length, 1);
+    const [only] = supers;
+    const demote = await api('PATCH', `/api/admins/${only.id}`, root, { isSuper: false }, only.version);
+    assert.equal(demote.status, 409, JSON.stringify(demote.body));
+    const remove = await api('DELETE', `/api/admins/${only.id}`, root, undefined, only.version);
+    assert.equal(remove.status, 409, JSON.stringify(remove.body));
+    assert.equal((await staffState(root)).admins.find(item => item.id === only.id).isSuper, true);
+  });
+});
+
 describe('Fase 2 / area 5: status do paciente', () => {
   before(() => ensureOutsider());
 

@@ -107,7 +107,7 @@ const stripVersions = state => ({
     instructions: instructions.map(({ version: instructionVersion, ...instruction }) => instruction)
   })),
   professionals: state.professionals.map(({ version, ...professional }) => professional),
-  admins: state.admins.map(({ version, ...admin }) => admin)
+  admins: state.admins.map(({ version, isSuper, ...admin }) => admin)
 });
 
 const main = async () => {

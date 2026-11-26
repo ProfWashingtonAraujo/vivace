@@ -405,6 +405,7 @@ const handleRequest = async (request, response) => {
         token,
         role: account.role,
         patientId: account.role === 'patient' ? account.userId : null,
+        userId: account.userId,
         name: account.name
       });
     } catch (error) {

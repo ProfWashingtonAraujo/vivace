@@ -46,10 +46,13 @@ describe('validateProfessional', () => {
 describe('validateAdmin', () => {
   const admin = { name: 'Admin', email: 'adm@vivace.med.br', password: 'senha-ok-123' };
 
-  it('aceita nome, e-mail e senha; so devolve esses campos', () => {
+  it('aceita nome, e-mail, senha e isSuper; so devolve esses campos, e isSuper comeca falso', () => {
     const result = validateAdmin({ ...admin, id: 'x', version: 9, role: 'x' });
     assert.equal(result.ok, true);
-    assert.deepEqual(Object.keys(result.values).sort(), ['email', 'name']);
+    assert.deepEqual(Object.keys(result.values).sort(), ['email', 'isSuper', 'name']);
+    assert.equal(result.values.isSuper, false);
+    assert.equal(validateAdmin({ ...admin, isSuper: true }).values.isSuper, true);
+    assert.equal(validateAdmin({ ...admin, isSuper: 'sim' }).ok, false);
     assert.equal(result.password, 'senha-ok-123');
   });
 
@@ -60,6 +63,7 @@ describe('validateAdmin', () => {
   it('parcial: so o que veio', () => {
     assert.deepEqual(validateAdmin({ name: 'Novo' }, { partial: true }).values, { name: 'Novo' });
     assert.equal(validateAdmin({ email: 'invalido' }, { partial: true }).ok, false);
+    assert.deepEqual(validateAdmin({ isSuper: true }, { partial: true }).values, { isSuper: true });
   });
 });
 
