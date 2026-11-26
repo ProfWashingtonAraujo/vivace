@@ -136,5 +136,7 @@ export interface AdminUser {
   id: string;
   name: string;
   email: string;
+  /** Super administrador: o único que cria e apaga administradores. */
+  isSuper?: boolean;
   password?: string;
 }

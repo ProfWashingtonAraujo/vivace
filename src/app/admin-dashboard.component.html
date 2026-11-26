@@ -68,4 +68,47 @@
       }
     </ul>
   </section>
+
+  <section class="bg-white rounded-3xl border border-[#D9E2EC] shadow-sm" aria-labelledby="admins-title">
+    <div class="p-4 sm:p-5 border-b border-[#D9E2EC]">
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <h2 id="admins-title" class="text-xl font-bold text-[#0B2A4A]">Administradores</h2>
+          <p class="mt-1 text-sm text-[#52627A]">Contas com acesso a esta tela de cadastros.</p>
+        </div>
+        @if (!adminFormOpen() && vivace.isSuperAdmin()) {<button type="button" (click)="startNewAdmin()" class="px-5 py-3 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold shrink-0">Novo administrador</button>}
+      </div>
+    </div>
+    @if (adminFormOpen()) {
+      <form (submit)="saveAdmin($event)" class="p-4 sm:p-5 space-y-4 border-b border-[#D9E2EC]" novalidate>
+        <h3 class="text-sm font-bold text-[#0B2A4A]">{{ editingAdminId() ? 'Editar administrador' : 'Novo administrador' }}</h3>
+        <div class="grid sm:grid-cols-2 gap-4">
+          <label class="text-xs font-bold">Nome<input [formField]="adminForm.name" class="form-input" /></label>
+          <label class="text-xs font-bold">E-mail<input type="email" [formField]="adminForm.email" class="form-input" /></label>
+          <label class="text-xs font-bold">Nova senha<input type="password" autocomplete="new-password" [formField]="adminForm.password" class="form-input" placeholder="Mínimo de 8 caracteres" /></label>
+          <label class="text-xs font-bold">Confirmar senha<input type="password" autocomplete="new-password" [formField]="adminForm.passwordConfirmation" class="form-input" placeholder="Digite novamente" /></label>
+          @if (vivace.isSuperAdmin()) {<label class="sm:col-span-2 flex items-center gap-2 text-xs font-bold"><input type="checkbox" [formField]="adminForm.isSuper" class="w-4 h-4" />Super administrador (pode cadastrar e excluir administradores)</label>}
+          @if (editingAdminId()) {<p class="sm:col-span-2 -mt-2 text-xs text-[#52627A]">Deixe os campos de senha vazios para manter a senha atual.</p>}
+        </div>
+        <div class="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+          <button type="button" (click)="cancelAdminEdit()" class="px-5 py-3 border border-[#D9E2EC] text-[#52627A] rounded-xl text-sm font-bold">Cancelar</button>
+          <button type="submit" [disabled]="adminForm().submitting()" class="px-5 py-3 bg-[#0B5CAB] hover:bg-[#094A8C] text-white rounded-xl text-sm font-bold disabled:opacity-60">{{ editingAdminId() ? 'Salvar alterações' : 'Cadastrar administrador' }}</button>
+        </div>
+      </form>
+    }
+    <ul class="divide-y divide-[#D9E2EC]">
+      @for (admin of vivace.admins(); track admin.id) {
+        <li class="flex items-center gap-x-4 p-4 sm:px-5">
+          <div class="min-w-0 flex-1">
+            <strong class="block">{{ admin.name }}@if (admin.isSuper) { <span class="ml-2 px-2 py-0.5 align-middle rounded-full bg-[#E6F0FA] text-[#0B5CAB] text-xs font-bold">Super admin</span>}</strong>
+            <span class="block truncate text-sm text-[#52627A]">{{ admin.email }}</span>
+          </div>
+          <div class="flex gap-1">
+            @if (vivace.isSuperAdmin() || admin.id === vivace.sessionUserId()) {<button type="button" (click)="editAdmin(admin)" [attr.aria-label]="'Editar ' + admin.name" class="px-3 py-2 text-sm font-bold text-[#0B5CAB] hover:bg-[#E6F0FA] rounded-lg">Editar</button>}
+            @if (vivace.isSuperAdmin()) {<button type="button" (click)="deleteAdmin(admin)" [attr.aria-label]="'Excluir ' + admin.name" class="px-3 py-2 text-sm font-bold text-[#BE123C] hover:bg-[#FFF1F2] rounded-lg">Excluir</button>}
+          </div>
+        </li>
+      }
+    </ul>
+  </section>
 </section>

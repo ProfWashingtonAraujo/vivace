@@ -776,9 +776,22 @@ const people = {
   },
   admin: {
     table: 'admins', role: 'admin', label: 'Administrator', of: adminOf, prefix: 'adm',
-    columns: { name: 'name', email: 'email' }
+    columns: { name: 'name', email: 'email', isSuper: 'is_super' }
   }
 };
+
+// Super admin: so ele cria e apaga administradores e muda o `is_super`. Um admin comum edita
+// so a propria conta (nome, e-mail e senha). O lock serializa as mudancas, para que duas
+// ao mesmo tempo nao deixem o sistema sem nenhum super admin.
+const lockAdmins = client => client.query("SELECT pg_advisory_xact_lock(hashtext('vivace-admins'))");
+
+const callerIsSuper = async (client, session) => {
+  const { rows } = await client.query('SELECT is_super FROM admins WHERE id = $1', [session.userId]);
+  return rows[0]?.is_super === true;
+};
+
+const otherSuperAdmins = async (client, id) =>
+  (await client.query('SELECT count(*)::int AS total FROM admins WHERE is_super AND id <> $1', [id])).rows[0].total;
 
 const readPerson = async (client, kind, id) => {
   const { rows } = await client.query(`SELECT * FROM ${people[kind].table} WHERE id = $1`, [id]);
@@ -788,6 +801,7 @@ const readPerson = async (client, kind, id) => {
 const createPerson = (kind, session, { values, password, clientId }) =>
   withSession(pool, session, async client => {
     adminOrThrow(session);
+    if (kind === 'admin' && !(await callerIsSuper(client, session))) throw denied();
     const config = people[kind];
     const id = clientId ?? `${config.prefix}-${randomUUID()}`;
     const existing = await readPerson(client, kind, id);
@@ -801,8 +815,8 @@ const createPerson = (kind, session, { values, password, clientId }) =>
         );
       } else {
         await client.query(
-          'INSERT INTO admins (id, name, email, position) VALUES ($1, $2, $3, (SELECT coalesce(max(position) + 1, 0) FROM admins))',
-          [id, values.name, values.email]
+          'INSERT INTO admins (id, name, email, position, is_super) VALUES ($1, $2, $3, (SELECT coalesce(max(position) + 1, 0) FROM admins), $4)',
+          [id, values.name, values.email, values.isSuper === true]
         );
       }
       await storePassword(client, id, config.role, password);
@@ -815,9 +829,17 @@ const createPerson = (kind, session, { values, password, clientId }) =>
 const updatePerson = (kind, session, { id, values, version }) =>
   withSession(pool, session, async client => {
     adminOrThrow(session);
+    if (kind === 'admin') {
+      await lockAdmins(client);
+      const isSuper = await callerIsSuper(client, session);
+      if (!isSuper && (id !== session.userId || 'isSuper' in values)) throw denied();
+    }
     const config = people[kind];
     const before = await readPerson(client, kind, id);
     if (!before) throw notFoundOf(config.label);
+    if (kind === 'admin' && before.isSuper && values.isSuper === false && await otherSuperAdmins(client, id) === 0) {
+      throw conflict('Last super administrator', 'Não é possível retirar o último super administrador');
+    }
     const assignments = [];
     const params = [id, version];
     for (const [field, column] of Object.entries(config.columns)) {
@@ -843,6 +865,7 @@ const updatePerson = (kind, session, { id, values, version }) =>
 const setPersonPassword = (kind, session, { id, password }) =>
   withSession(pool, session, async client => {
     adminOrThrow(session);
+    if (kind === 'admin' && id !== session.userId && !(await callerIsSuper(client, session))) throw denied();
     if (!(await readPerson(client, kind, id))) throw notFoundOf(people[kind].label);
     await storePassword(client, id, people[kind].role, password);
     await dropSessions(client, people[kind].role, id);
@@ -884,10 +907,14 @@ export const deleteProfessional = (session, { id, version }) =>
 export const deleteAdmin = (session, { id, version }) =>
   withSession(pool, session, async client => {
     adminOrThrow(session);
-    await client.query("SELECT pg_advisory_xact_lock(hashtext('vivace-admins'))");
+    await lockAdmins(client);
+    if (!(await callerIsSuper(client, session))) throw denied();
     const current = await readPerson(client, 'admin', id);
     if (!current) throw notFoundOf('Administrator');
     if (current.version !== version) throw versionConflict(current);
+    if (current.isSuper && await otherSuperAdmins(client, id) === 0) {
+      throw conflict('Last super administrator', 'Não é possível apagar o último super administrador');
+    }
     const total = (await client.query('SELECT count(*)::int AS total FROM admins')).rows[0].total;
     if (total <= 1) throw conflict('Last administrator', 'Não é possível apagar o último administrador');
     await client.query('DELETE FROM admins WHERE id = $1', [id]);

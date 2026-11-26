@@ -29,6 +29,7 @@ interface StoredSession {
   patientId: string;
   token: string;
   name: string;
+  userId?: string;
 }
 
 export interface LoginResult {
@@ -55,6 +56,10 @@ export class VivaceService {
   // Aviso de falha ou conflito de uma gravação, mostrado pelo shell do app.
   readonly notice = signal<{ text: string; error: boolean } | null>(null);
   readonly sessionName = signal(this.storedSession?.name ?? '');
+  readonly sessionUserId = signal(this.storedSession?.userId ?? '');
+  // Só o super administrador cria e apaga administradores; o servidor confere de novo.
+  readonly currentAdmin = computed(() => this.admins().find(admin => admin.id === this.sessionUserId()));
+  readonly isSuperAdmin = computed(() => this.currentAdmin()?.isSuper === true);
   readonly professionalUser = computed(() => this.professionals()[0] ?? CURRENT_PROFESSIONAL);
   readonly selectedPatient = computed(() =>
     this.patients().find(patient => patient.id === this.activePatientId()) ?? this.patients()[0]
@@ -94,7 +99,7 @@ export class VivaceService {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password })
       });
-      const result = await response.json().catch(() => ({})) as { token?: string; role?: UserRole; patientId?: string | null; name?: string; error?: string };
+      const result = await response.json().catch(() => ({})) as { token?: string; role?: UserRole; patientId?: string | null; userId?: string; name?: string; error?: string };
       if (!response.ok || !result.token || !result.role) {
         return { ok: false, message: result.error ?? 'Não foi possível entrar. Verifique a conexão e tente novamente.' };
       }
@@ -102,6 +107,7 @@ export class VivaceService {
       this.currentRole.set(result.role);
       if (result.patientId) this.activePatientId.set(result.patientId);
       this.sessionName.set(result.name ?? '');
+      this.sessionUserId.set(result.userId ?? '');
       this.isLoggedIn.set(true);
       this.saveSession(rememberMe);
       this.listenForMessages();
@@ -118,6 +124,7 @@ export class VivaceService {
     this.stopListening();
     this.isLoggedIn.set(false);
     this.sessionName.set('');
+    this.sessionUserId.set('');
     this.clearClinicalData();
     try {
       localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -222,6 +229,27 @@ export class VivaceService {
       return false;
     }
     return this.save('DELETE', `/api/professionals/${encodeURIComponent(id)}`, { version: this.versionOf(this.professionals(), id, version) });
+  }
+
+  addAdmin(admin: Pick<AdminUser, 'name' | 'email' | 'password' | 'isSuper'>): Promise<boolean> {
+    return this.save('POST', '/api/admins', { body: { ...admin, clientId: this.newClientId('adm') } });
+  }
+
+  async deleteAdmin(id: string, version?: number): Promise<boolean> {
+    if (this.admins().length <= 1) {
+      this.notify('Mantenha ao menos um administrador cadastrado.', true);
+      return false;
+    }
+    return this.save('DELETE', `/api/admins/${encodeURIComponent(id)}`, { version: this.versionOf(this.admins(), id, version) });
+  }
+
+  async updateAdmin(id: string, changes: Pick<AdminUser, 'name' | 'email' | 'password' | 'isSuper'>, version?: number): Promise<boolean> {
+    const { password, ...fields } = changes;
+    const saved = await this.save('PATCH', `/api/admins/${encodeURIComponent(id)}`, {
+      body: fields, version: this.versionOf(this.admins(), id, version)
+    });
+    if (!saved || !password) return saved;
+    return this.save('PUT', `/api/admins/${encodeURIComponent(id)}/password`, { body: { password } });
   }
 
   addPatient(patient: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): Promise<boolean> {
@@ -602,7 +630,8 @@ export class VivaceService {
         role: this.currentRole(),
         patientId: this.activePatientId(),
         token: this.token,
-        name: this.sessionName()
+        name: this.sessionName(),
+        userId: this.sessionUserId()
       } satisfies StoredSession));
       otherStorage.removeItem(SESSION_STORAGE_KEY);
     } catch {
