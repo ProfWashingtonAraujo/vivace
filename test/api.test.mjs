@@ -1646,3 +1646,195 @@ describe('I9 / area 3: visibilidade fail-closed pelo PUT', () => {
     assert.ok(visible.includes('pat-i9-label'));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Fase 2, area 3b: cadastro de paciente por chamadas proprias (criar, editar com
+// If-Match, apagar, trocar a senha) e equipe definida so pelo admin.
+
+const newPatient = (over = {}) => ({
+  name: 'Paciente 3b', email: `p3b-${Math.random().toString(36).slice(2, 9)}@email.com`, password: 'senha-3b-ok',
+  age: 41, gender: 'Feminino', phone: '(11) 90000-0000', cpf: '000.000.000-00', procedure: 'Abdominoplastia',
+  surgeryDate: '2026-11-01', dischargeDate: '2026-11-03', hospital: 'Hospital X', ...over
+});
+const postPatient = (token, body) => call('/api/patients', { method: 'POST', token, body });
+const ifMatch = version => (version === undefined ? {} : { 'If-Match': String(version) });
+const patchPatient = (token, id, body, version) => call(`/api/patients/${id}`, { method: 'PATCH', token, body, headers: ifMatch(version) });
+const deletePatient = (token, id, version) => call(`/api/patients/${id}`, { method: 'DELETE', token, headers: ifMatch(version) });
+const putPassword = (token, id, body) => call(`/api/patients/${id}/password`, { method: 'PUT', token, body });
+const putTeam = (token, id, body) => call(`/api/patients/${id}/care-team`, { method: 'PUT', token, body });
+const visibleIds = async token => (await staffState(token)).patients.map(patient => patient.id);
+const loginAs = (username, password, ip) => call('/api/auth/login', { method: 'POST', ip, body: { username, password } });
+
+describe('Fase 2 / area 3b: criar paciente', () => {
+  before(ensureOutsider);
+
+  it('o profissional cria; id, versao, status e dia de pos-operatorio vem do servidor, e ele entra na equipe', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const created = await postPatient(staff, { ...newPatient(), id: 'pat-forjado', version: 9, status: 'critico', postOpDay: 99 });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const { patient } = created.body;
+    assert.notEqual(patient.id, 'pat-forjado');
+    assert.equal(patient.version, 1);
+    assert.equal(patient.status, 'estavel');
+    const expectedDay = Math.max(0, Math.floor((Date.now() - new Date('2026-11-01T12:00:00').getTime()) / 86_400_000));
+    assert.ok(Math.abs(patient.postOpDay - expectedDay) <= 1, `postOpDay ${patient.postOpDay} esperado ~${expectedDay}`);
+    assert.match(patient.avatar, /^https:\/\/ui-avatars\.com\//);
+    assert.deepEqual([patient.timeline, patient.medications, patient.checkIns, patient.messages], [[], [], [], []]);
+
+    assert.ok((await visibleIds(staff)).includes(patient.id), 'o criador nao ve o paciente que criou');
+    assert.ok(!(await visibleIds((await login('Helena Duarte')).token)).includes(patient.id), 'um profissional fora da equipe o ve');
+    assert.ok((await visibleIds((await login('admin@vivace.med.br')).token)).includes(patient.id));
+  });
+
+  it('a senha informada abre o login do paciente novo', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const body = newPatient({ password: 'minha-senha-3b' });
+    assert.equal((await postPatient(staff, body)).status, 201);
+    const result = await loginAs(body.email, 'minha-senha-3b', '10.9.3.1');
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.role, 'patient');
+  });
+
+  it('repetir o mesmo clientId nao duplica; e-mail repetido responde 409', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const body = { ...newPatient({ name: 'Idempotente 3b' }), clientId: 'pat-cliente-3b' };
+    const first = await postPatient(staff, body);
+    const second = await postPatient(staff, body);
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 200);
+    assert.equal(second.body.patient.id, first.body.patient.id);
+    assert.equal((await postPatient(staff, newPatient({ email: body.email }))).status, 409);
+    assert.equal((await postPatient(staff, newPatient({ email: 'mariana.souza@email.com' }))).status, 409);
+  });
+
+  it('dados invalidos respondem 400', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const invalid = [
+      { name: '' }, { name: 'x'.repeat(121) }, { email: 'invalido' }, { email: undefined }, { password: 'curta' },
+      { password: undefined }, { age: -1 }, { age: 200 }, { age: 'x' }, { surgeryDate: '2026-13-45' }, { surgeryDate: 'ontem' },
+      { cpf: 'x'.repeat(21) }, { avatar: 'javascript:alert(1)' }, { avatar: 'http://inseguro.com/a.png' },
+      { avatar: `data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}` }
+    ];
+    for (const over of invalid) {
+      assert.equal((await postPatient(staff, newPatient(over))).status, 400, `deveria recusar ${JSON.stringify(over).slice(0, 50)}`);
+    }
+  });
+
+  it('o paciente nao cria (403); o admin cria sem equipe e so ele ve; com professionalIds a equipe passa a ver', async () => {
+    assert.equal((await postPatient((await login('mariana')).token, newPatient())).status, 403);
+    const admin = (await login('admin@vivace.med.br')).token;
+    const orphan = (await postPatient(admin, newPatient({ name: 'Sem equipe 3b' }))).body.patient;
+    assert.ok((await visibleIds(admin)).includes(orphan.id));
+    assert.ok(!(await visibleIds((await login('Rafaely Carvalho')).token)).includes(orphan.id), 'a equipe ve um paciente sem equipe');
+
+    const withTeam = (await postPatient(admin, { ...newPatient({ name: 'Com equipe 3b' }), professionalIds: ['prof-1'] })).body.patient;
+    assert.ok((await visibleIds((await login('Rafaely Carvalho')).token)).includes(withTeam.id));
+    assert.ok(!(await visibleIds((await login('Helena Duarte')).token)).includes(withTeam.id));
+  });
+});
+
+describe('Fase 2 / area 3b: editar e apagar paciente', () => {
+  before(ensureOutsider);
+  const fresh = async name => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    return { staff, patient: (await postPatient(staff, newPatient({ name }))).body.patient };
+  };
+
+  it('editar com a versao certa sobe a versao, muda so o que veio e recalcula o dia de pos-operatorio', async () => {
+    const { staff, patient } = await fresh('Edicao 3b');
+    const patched = await patchPatient(staff, patient.id, { phone: '(11) 98888-7777', surgeryDate: '2026-11-20', status: 'critico', currentPain: 9, id: 'x', version: 50 }, patient.version);
+    assert.equal(patched.status, 200, JSON.stringify(patched.body));
+    const updated = patched.body.patient;
+    assert.equal(updated.version, patient.version + 1);
+    assert.equal(updated.phone, '(11) 98888-7777');
+    assert.equal(updated.name, 'Edicao 3b');
+    assert.equal(updated.id, patient.id);
+    assert.equal(updated.status, 'estavel', 'o status e do paciente/equipe, nao do cadastro');
+    assert.equal(updated.currentPain, 0);
+    assert.notEqual(updated.postOpDay, patient.postOpDay, 'o dia de pos-operatorio nao foi recalculado');
+  });
+
+  it('sem If-Match 428; versao velha 409 com a atual e sem gravar; mesmos valores nao sobem a versao', async () => {
+    const { staff, patient } = await fresh('Conflito 3b');
+    assert.equal((await patchPatient(staff, patient.id, { phone: 'x' })).status, 428);
+    assert.equal((await patchPatient(staff, patient.id, { phone: 'primeira' }, 1)).status, 200);
+    const stale = await patchPatient(staff, patient.id, { phone: 'atrasada' }, 1);
+    assert.equal(stale.status, 409, JSON.stringify(stale.body));
+    assert.equal(stale.body.current.version, 2);
+    assert.equal(stale.body.current.phone, 'primeira');
+    const same = await patchPatient(staff, patient.id, { phone: 'primeira' }, 2);
+    assert.equal(same.status, 200);
+    assert.equal(same.body.patient.version, 2);
+  });
+
+  it('e-mail ja usado responde 409; a senha no corpo do PATCH e ignorada', async () => {
+    const { staff, patient } = await fresh('Email 3b');
+    assert.equal((await patchPatient(staff, patient.id, { email: 'mariana.souza@email.com' }, patient.version)).status, 409);
+    const body = newPatient({ name: 'Senha 3b', password: 'senha-original-3b' });
+    const created = (await postPatient(staff, body)).body.patient;
+    assert.equal((await patchPatient(staff, created.id, { password: 'tentativa-3b-x' }, created.version)).status, 200);
+    assert.equal((await loginAs(body.email, 'senha-original-3b', '10.9.3.2')).status, 200, 'a senha original deveria continuar valendo');
+  });
+
+  it('paciente 403 e profissional fora da equipe 404', async () => {
+    const { patient } = await fresh('Acesso 3b');
+    assert.equal((await patchPatient((await login('mariana')).token, patient.id, { phone: 'x' }, 1)).status, 403);
+    assert.equal((await patchPatient((await login('Helena Duarte')).token, patient.id, { phone: 'x' }, 1)).status, 404);
+    assert.equal((await deletePatient((await login('Helena Duarte')).token, patient.id, 1)).status, 404);
+  });
+
+  it('apagar exige a versao: sem ela 428, velha 409 e nao apaga, certa apaga; inexistente 404', async () => {
+    const { staff, patient } = await fresh('Apagar 3b');
+    assert.equal((await deletePatient(staff, patient.id)).status, 428);
+    assert.equal((await patchPatient(staff, patient.id, { phone: 'nova' }, 1)).status, 200);
+    assert.equal((await deletePatient(staff, patient.id, 1)).status, 409);
+    assert.ok((await visibleIds(staff)).includes(patient.id));
+    assert.equal((await deletePatient(staff, patient.id, 2)).status, 200);
+    assert.ok(!(await visibleIds(staff)).includes(patient.id));
+    assert.equal((await deletePatient(staff, 'pat-que-nao-existe', 1)).status, 404);
+  });
+});
+
+describe('Fase 2 / area 3b: senha e equipe do paciente', () => {
+  before(ensureOutsider);
+
+  it('a equipe troca a senha: a nova entra, a antiga nao; senha curta 400; paciente 403; fora da equipe 404', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const body = newPatient({ name: 'Troca senha 3b', password: 'senha-antiga-3b' });
+    const { patient } = (await postPatient(staff, body)).body;
+    assert.equal((await putPassword(staff, patient.id, { password: 'senha-nova-3b-ok' })).status, 200);
+    assert.equal((await loginAs(body.email, 'senha-nova-3b-ok', '10.9.3.3')).status, 200);
+    assert.equal((await loginAs(body.email, 'senha-antiga-3b', '10.9.3.4')).status, 401);
+    for (const password of ['curta', '', undefined, 12345678]) {
+      assert.equal((await putPassword(staff, patient.id, { password })).status, 400, `senha ${JSON.stringify(password)}`);
+    }
+    assert.equal((await putPassword((await login('mariana')).token, patient.id, { password: 'senha-nova-3b-ok' })).status, 403);
+    assert.equal((await putPassword((await login('Helena Duarte')).token, patient.id, { password: 'senha-nova-3b-ok' })).status, 404);
+  });
+
+  it('so o admin define a equipe: troca, esvazia, recusa profissional que nao existe', async () => {
+    const admin = (await login('admin@vivace.med.br')).token;
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { patient } = (await postPatient(admin, { ...newPatient({ name: 'Equipe 3b' }), professionalIds: ['prof-1'] })).body;
+    assert.equal((await putTeam(staff, patient.id, { professionalIds: [] })).status, 403, 'profissional nao define equipe');
+    assert.equal((await putTeam((await login('mariana')).token, patient.id, { professionalIds: [] })).status, 403);
+    assert.ok((await visibleIds(staff)).includes(patient.id));
+
+    const emptied = await putTeam(admin, patient.id, { professionalIds: [] });
+    assert.equal(emptied.status, 200, JSON.stringify(emptied.body));
+    assert.deepEqual(emptied.body.careTeam, []);
+    assert.ok(!(await visibleIds(staff)).includes(patient.id), 'a equipe esvaziada continua vendo o paciente');
+    assert.ok((await visibleIds(admin)).includes(patient.id));
+
+    const restored = await putTeam(admin, patient.id, { professionalIds: ['prof-1', 'prof-9'] });
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+    assert.deepEqual(restored.body.careTeam, [{ professionalId: 'prof-1', role: 'cirurgiao' }, { professionalId: 'prof-9', role: 'equipe' }]);
+    assert.ok((await visibleIds(staff)).includes(patient.id));
+    assert.ok((await visibleIds((await login('Helena Duarte')).token)).includes(patient.id));
+
+    assert.equal((await putTeam(admin, patient.id, { professionalIds: ['prof-inexistente'] })).status, 404);
+    assert.equal((await putTeam(admin, patient.id, { professionalIds: 'prof-1' })).status, 400);
+    assert.equal((await putTeam(admin, patient.id, { professionalIds: ['prof-1', 'prof-1'] })).status, 400);
+    assert.equal((await putTeam(admin, 'pat-que-nao-existe', { professionalIds: [] })).status, 404);
+  });
+});
