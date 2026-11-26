@@ -73,10 +73,12 @@ export class PatientRecordComponent {
   readonly noteMessage = signal('');
   readonly showMedicationForm = signal(false);
   readonly editingMedicationId = signal<string | null>(null);
+  private editingMedicationVersion?: number;
   readonly medicationTimes = signal<string[]>([]);
   readonly medicationMessage = signal('');
   readonly showInstructionForm = signal(false);
   readonly editingInstructionId = signal<string | null>(null);
+  private editingInstructionVersion?: number;
   readonly instructionMessage = signal('');
   readonly sendingChat = signal(false);
   readonly chatError = signal('');
@@ -289,18 +291,18 @@ export class PatientRecordComponent {
     this.selectedPhotoId.set(photo.id);
   }
 
-  saveReview(): void {
+  async saveReview(): Promise<void> {
     const photo = this.selectedPhoto();
     const verdict = this.reviewVerdict();
     if (!photo || !verdict || !this.reviewComment().trim()) return;
-    this.vivace.reviewWoundPhoto(this.patient().id, photo.id, verdict, this.reviewComment());
+    if (!await this.vivace.reviewWoundPhoto(this.patient().id, photo.id, verdict, this.reviewComment())) return;
     this.editingReview.set(false);
     this.savedMessage.set('Parecer registrado e disponibilizado ao paciente.');
     window.setTimeout(() => this.savedMessage.set(''), 3000);
   }
 
   updateStatus(status: AlertSeverity): void {
-    this.vivace.updatePatientStatus(this.patient().id, status);
+    void this.vivace.updatePatientStatus(this.patient().id, status);
   }
 
   formatDate(value: string): string {
@@ -318,6 +320,7 @@ export class PatientRecordComponent {
 
   editMedication(medication: MedicationItem): void {
     this.editingMedicationId.set(medication.id);
+    this.editingMedicationVersion = medication.version;
     this.medicationModel = {
       name: medication.name,
       dose: medication.dose,
@@ -338,7 +341,7 @@ export class PatientRecordComponent {
     this.medicationTimes.update(times => times.filter(item => item !== time));
   }
 
-  saveMedication(): void {
+  async saveMedication(): Promise<void> {
     const medication = {
       name: this.medicationModel.name.trim(),
       dose: this.medicationModel.dose.trim(),
@@ -353,15 +356,17 @@ export class PatientRecordComponent {
     }
 
     const editingId = this.editingMedicationId();
-    if (editingId) this.vivace.updateMedication(this.patient().id, editingId, medication);
-    else this.vivace.addMedication(this.patient().id, medication);
+    const saved = editingId
+      ? await this.vivace.updateMedication(this.patient().id, editingId, medication, this.editingMedicationVersion)
+      : await this.vivace.addMedication(this.patient().id, medication);
+    if (!saved) return;
     this.cancelMedicationEdit();
     this.showMedicationFeedback(editingId ? 'Medicamento atualizado com sucesso.' : 'Medicamento adicionado à prescrição.');
   }
 
-  deleteMedication(medication: MedicationItem): void {
+  async deleteMedication(medication: MedicationItem): Promise<void> {
     if (!window.confirm(`Excluir ${medication.name} da prescrição?`)) return;
-    this.vivace.deleteMedication(this.patient().id, medication.id);
+    if (!await this.vivace.deleteMedication(this.patient().id, medication.id, medication.version)) return;
     if (this.editingMedicationId() === medication.id) this.cancelMedicationEdit();
     this.showMedicationFeedback('Medicamento excluído da prescrição.');
   }
@@ -381,6 +386,7 @@ export class PatientRecordComponent {
 
   editInstruction(instruction: PostOpInstruction): void {
     this.editingInstructionId.set(instruction.id);
+    this.editingInstructionVersion = instruction.version;
     this.instructionModel = {
       category: instruction.category,
       title: instruction.title,
@@ -390,7 +396,7 @@ export class PatientRecordComponent {
     this.showInstructionForm.set(true);
   }
 
-  saveInstruction(): void {
+  async saveInstruction(): Promise<void> {
     const instruction = {
       category: this.instructionModel.category,
       title: this.instructionModel.title.trim(),
@@ -404,15 +410,17 @@ export class PatientRecordComponent {
     }
 
     const editingId = this.editingInstructionId();
-    if (editingId) this.vivace.updateInstruction(this.patient().id, editingId, instruction);
-    else this.vivace.addInstruction(this.patient().id, instruction);
+    const saved = editingId
+      ? await this.vivace.updateInstruction(this.patient().id, editingId, instruction, this.editingInstructionVersion)
+      : await this.vivace.addInstruction(this.patient().id, instruction);
+    if (!saved) return;
     this.cancelInstructionEdit();
     this.showInstructionFeedback(editingId ? 'Orientação atualizada com sucesso.' : 'Orientação enviada ao paciente.');
   }
 
-  deleteInstruction(instruction: PostOpInstruction): void {
+  async deleteInstruction(instruction: PostOpInstruction): Promise<void> {
     if (!window.confirm(`Excluir a orientação “${instruction.title}”?`)) return;
-    this.vivace.deleteInstruction(this.patient().id, instruction.id);
+    if (!await this.vivace.deleteInstruction(this.patient().id, instruction.id, instruction.version)) return;
     if (this.editingInstructionId() === instruction.id) this.cancelInstructionEdit();
     this.showInstructionFeedback('Orientação excluída.');
   }
@@ -433,9 +441,9 @@ export class PatientRecordComponent {
     else this.chatError.set('Não foi possível enviar. Verifique a conexão e tente novamente.');
   }
 
-  addNote(): void {
+  async addNote(): Promise<void> {
     if (!this.noteText.trim()) return;
-    this.vivace.addClinicalNote(this.patient().id, this.noteText);
+    if (!await this.vivace.addClinicalNote(this.patient().id, this.noteText)) return;
     this.noteText = '';
     this.noteMessage.set('Nota salva no prontuário.');
     window.setTimeout(() => this.noteMessage.set(''), 3000);

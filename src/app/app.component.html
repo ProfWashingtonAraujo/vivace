@@ -38,6 +38,13 @@
       }
     </main>
 
+    @if (vivace.notice(); as notice) {
+      <div role="alert" aria-live="assertive" class="fixed inset-x-3 bottom-4 z-50 mx-auto max-w-md px-4 py-3 rounded-2xl shadow-xl text-sm font-bold flex items-start justify-between gap-3" [class]="notice.error ? 'bg-[#FFE5E0] text-[#C2412D]' : 'bg-[#D1FAE5] text-[#065F46]'">
+        <span>{{ notice.text }}</span>
+        <button type="button" (click)="vivace.notice.set(null)" aria-label="Fechar aviso" class="shrink-0">×</button>
+      </div>
+    }
+
     <footer class="py-5 border-t bg-white text-center text-xs text-[#52627A]"><div class="max-w-7xl mx-auto px-4"><span><strong class="text-[#0B5CAB]">VIVACE</strong> · Acompanhamento pós-operatório humanizado</span></div></footer>
   </div>
 }
