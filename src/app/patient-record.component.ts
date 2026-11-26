@@ -5,7 +5,7 @@ import type { Options } from 'highcharts';
 import { HighchartsChartDirective } from 'highcharts-angular';
 import { AlertSeverity, DailyCheckIn, MedicationItem, PostOpInstruction, TimelineEvent, WoundPhoto } from '../types';
 import { VivaceService } from './vivace.service';
-import { pressureBandFromText } from './pressure';
+import { pressureBand, pressureBandFromText } from './pressure';
 import { spo2Band } from './spo2';
 
 type RecordTab = 'wounds' | 'timeline' | 'vitals' | 'meds' | 'care' | 'chat' | 'notes';
@@ -180,6 +180,111 @@ export class PatientRecordComponent {
   }
 
   readonly recentCheckIns = computed(() => [...this.chronologicalCheckIns()].reverse());
+
+  // Só entram nos gráficos os check-ins em que o paciente informou o dado (o aparelho é opcional).
+  readonly spo2CheckIns = computed(() => this.chronologicalCheckIns().filter(item => item.spo2 != null));
+  readonly pressureCheckIns = computed(() => this.chronologicalCheckIns().filter(item => item.systolic != null && item.diastolic != null));
+  readonly spo2ChartOptions = computed<Options>(() => {
+    const checkIns = this.spo2CheckIns();
+    const level = (value: number) => value >= 95 ? { label: 'Normal', color: '#1F7A5C' } : value >= 90 ? { label: 'Hipóxia leve', color: '#B45309' } : { label: 'Hipóxia', color: '#C2412D' };
+    const last = checkIns.at(-1);
+    const previous = checkIns.at(-2);
+    const delta = last && previous ? (last.spo2 as number) - (previous.spo2 as number) : 0;
+    const trend = !previous ? '' : delta === 0 ? ' · igual ao registro anterior' : ` · ${delta < 0 ? 'queda' : 'alta'} de ${Math.abs(delta)} ${Math.abs(delta) === 1 ? 'ponto' : 'pontos'} desde o registro anterior`;
+    const min = Math.min(85, ...checkIns.map(item => (item.spo2 as number) - 2));
+    return {
+      chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 12, 8, 8] },
+      title: { text: 'Saturação de oxigênio', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
+      subtitle: { text: last ? `Último registro: ${last.spo2}% (${level(last.spo2 as number).label.toLowerCase()}) em ${last.dayLabel}${trend}` : 'Sem registros de saturação', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
+      xAxis: { categories: checkIns.map(item => this.checkInAxisLabel(item, checkIns)), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
+      yAxis: [{
+        min,
+        max: 100,
+        tickInterval: 5,
+        title: { text: '' },
+        gridLineColor: '#E6ECF2',
+        labels: { format: '{value}%', style: { color: '#52627A', fontSize: '12px' } },
+        plotBands: [
+          { from: min, to: 90, color: 'rgba(194,65,45,0.08)' },
+          { from: 90, to: 95, color: 'rgba(180,83,9,0.09)' },
+          { from: 95, to: 100, color: 'rgba(31,122,92,0.07)' }
+        ]
+      }, {
+        linkedTo: 0,
+        opposite: true,
+        title: { text: '' },
+        gridLineWidth: 0,
+        tickPositions: [(min + 90) / 2, 92.5, 97.5],
+        labels: {
+          useHTML: false,
+          formatter() {
+            const value = Number(this.value);
+            return value < 90 ? 'Hipóxia' : value < 95 ? 'Hipóxia leve' : 'Normal';
+          },
+          style: { color: '#52627A', fontSize: '12px' }
+        }
+      }],
+      tooltip: {
+        useHTML: false,
+        formatter() {
+          const point = this as unknown as { y: number; point: { index: number } };
+          const item = checkIns[point.point.index];
+          return `${item.dayLabel} · ${item.date} — Saturação ${point.y}% (${level(point.y).label.toLowerCase()})`;
+        }
+      },
+      legend: { enabled: false },
+      credits: { enabled: false },
+      accessibility: { description: `Gráfico da saturação de oxigênio em cada check-in. ${checkIns.map(item => `${item.dayLabel}: ${item.spo2} por cento`).join('; ')}.` },
+      plotOptions: { series: { lineWidth: 3, marker: { enabled: true, radius: 6, lineWidth: 2, lineColor: '#FFFFFF' }, dataLabels: { enabled: true, y: -4, style: { color: '#1B2B3F', fontSize: '12px', fontWeight: '700', textOutline: 'none' }, format: '{y}' } } },
+      series: [{ name: 'Saturação', type: 'spline', color: '#0B5CAB', data: checkIns.map(item => ({ y: item.spo2 as number, color: level(item.spo2 as number).color })) }]
+    };
+  });
+  readonly pressureChartOptions = computed<Options>(() => {
+    const checkIns = this.pressureCheckIns();
+    const last = checkIns.at(-1);
+    const band = last ? pressureBand(last.systolic, last.diastolic).label.toLowerCase() : '';
+    const pulse = last?.pulse == null ? '' : ` · pulso ${last.pulse} bpm`;
+    const top = Math.max(200, ...checkIns.map(item => (item.systolic as number) + 10));
+    const bottom = Math.min(50, ...checkIns.map(item => (item.diastolic as number) - 10));
+    return {
+      chart: { type: 'spline', height: 280, backgroundColor: 'transparent', spacing: [10, 12, 8, 8] },
+      title: { text: 'Pressão arterial', align: 'left', style: { color: '#1B2B3F', fontSize: '14px', fontWeight: '700' } },
+      subtitle: { text: last ? `Último registro: ${last.systolic}/${last.diastolic} mmHg (${band}) em ${last.dayLabel}${pulse}` : 'Sem registros de pressão', align: 'left', style: { color: '#52627A', fontSize: '12px' } },
+      xAxis: { categories: checkIns.map(item => this.checkInAxisLabel(item, checkIns)), tickLength: 0, lineColor: '#D9E2EC', labels: { style: { color: '#52627A', fontSize: '12px' } } },
+      // Faixa verde de 60 (mínima normal) a 140 (máxima normal), vermelha abaixo de 60 e acima de 180.
+      yAxis: [{
+        min: bottom,
+        max: top,
+        tickInterval: 20,
+        title: { text: '' },
+        gridLineColor: '#E6ECF2',
+        labels: { style: { color: '#52627A', fontSize: '12px' } },
+        plotBands: [
+          { from: bottom, to: 60, color: 'rgba(194,65,45,0.08)' },
+          { from: 60, to: 140, color: 'rgba(31,122,92,0.07)' },
+          { from: 140, to: 180, color: 'rgba(180,83,9,0.09)' },
+          { from: 180, to: top, color: 'rgba(194,65,45,0.08)' }
+        ]
+      }],
+      tooltip: {
+        useHTML: false,
+        shared: true,
+        formatter() {
+          const point = (this as unknown as { points: { point: { index: number } }[] }).points[0];
+          const item = checkIns[point.point.index];
+          return `${item.dayLabel} · ${item.date} — ${item.systolic}/${item.diastolic} mmHg${item.pulse == null ? '' : ` · pulso ${item.pulse} bpm`}`;
+        }
+      },
+      legend: { enabled: true, itemStyle: { color: '#52627A', fontSize: '12px', fontWeight: '600' } },
+      credits: { enabled: false },
+      accessibility: { description: `Gráfico da pressão arterial em cada check-in. ${checkIns.map(item => `${item.dayLabel}: ${item.systolic} por ${item.diastolic}`).join('; ')}.` },
+      plotOptions: { series: { lineWidth: 3, marker: { enabled: true, radius: 5, lineWidth: 2, lineColor: '#FFFFFF' }, dataLabels: { enabled: true, style: { color: '#1B2B3F', fontSize: '11px', fontWeight: '700', textOutline: 'none' }, format: '{y}' } } },
+      series: [
+        { name: 'Máxima (sistólica)', type: 'spline', color: '#0B5CAB', dataLabels: { y: -6 }, data: checkIns.map(item => item.systolic as number) },
+        { name: 'Mínima (diastólica)', type: 'spline', color: '#52627A', dashStyle: 'ShortDash', dataLabels: { y: 16 }, data: checkIns.map(item => item.diastolic as number) }
+      ]
+    };
+  });
   readonly painChartOptions = computed<Options>(() => {
     const checkIns = this.chronologicalCheckIns();
     const level = (pain: number) => pain >= 7 ? { label: 'Intensa', color: '#C2412D' } : pain >= 4 ? { label: 'Moderada', color: '#B45309' } : { label: 'Leve', color: '#1F7A5C' };
