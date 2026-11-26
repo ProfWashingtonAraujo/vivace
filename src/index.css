@@ -120,3 +120,31 @@
   background-color: #DCEBFA; border-color: #0B5CAB; color: #0B5CAB; font-weight: 600;
 }
 .selected-review-alert { background-color: #FFE5E0; border-color: #FF7F66; color: #C2412D; }
+
+/* Medicação do paciente: linha do dia por horário */
+.dose-count { margin-top: .75rem; font-size: .875rem; color: #DCEBFA; }
+.dose-count strong { margin-right: .25rem; font-size: 2.5rem; line-height: 1; font-weight: 700; color: #fff; font-variant-numeric: tabular-nums; }
+.dose-ticks { display: flex; gap: 4px; margin: .75rem 0; }
+.dose-ticks span { flex: 1; max-width: 2rem; height: 6px; border-radius: 3px; background: rgb(255 255 255 / .25); transition: background-color .3s; }
+.dose-ticks span.on { background: #71D3B3; }
+.dose-rail { list-style: none; margin: 0; padding: 0; }
+.dose-row { display: grid; grid-template-columns: 3.25rem 1rem minmax(0, 1fr); gap: .625rem; padding-bottom: .75rem; }
+.dose-time { padding-top: 1.05rem; text-align: right; font-size: 1.05rem; font-weight: 700; font-variant-numeric: tabular-nums; color: #1B2B3F; }
+.dose-node { display: flex; flex-direction: column; align-items: center; padding-top: 1.2rem; }
+.dose-node i { flex: none; width: .875rem; height: .875rem; border-radius: 50%; border: 2px solid #9FB1C6; background: #fff; }
+.dose-node::after { content: ''; flex: 1; width: 2px; margin-top: .25rem; background: #D9E2EC; }
+.dose-row:last-child .dose-node::after { display: none; }
+.dose-card { padding: 1rem; border: 1px solid #D9E2EC; border-radius: 1.25rem; background: #fff; }
+.dose-flag { margin-top: .25rem; font-size: .75rem; font-weight: 700; color: #0B5CAB; }
+.dose-flag.late { color: #92400E; }
+.dose-button { display: flex; align-items: center; justify-content: center; gap: .5rem; width: 100%; min-height: 3.5rem; margin-top: .75rem; padding: .5rem 1rem; border: 2px solid #0B5CAB; border-radius: 1rem; background: #fff; color: #0B5CAB; font-size: .95rem; font-weight: 700; }
+.dose-button:focus-visible { outline: 3px solid #0B5CAB; outline-offset: 2px; }
+.dose-button:disabled { opacity: .7; cursor: progress; }
+.dose-row[data-state='next'] .dose-card { border-color: #0B5CAB; box-shadow: 0 0 0 3px #DCEBFA; }
+.dose-row[data-state='next'] .dose-node i { border-color: #0B5CAB; background: #0B5CAB; }
+.dose-row[data-state='next'] .dose-button { background: #0B5CAB; color: #fff; }
+.dose-row[data-state='late'] .dose-node i { border-color: #B45309; }
+.dose-row[data-state='taken'] .dose-card { border-color: #BFE8DA; background: #F3FBF8; }
+.dose-row[data-state='taken'] .dose-node i { border-color: #0A7A59; background: #0A7A59; }
+.dose-row[data-state='taken'] .dose-button { border-color: #9ADBC4; color: #0A7A59; }
+@media (prefers-reduced-motion: reduce) { .dose-ticks span { transition: none; } }
