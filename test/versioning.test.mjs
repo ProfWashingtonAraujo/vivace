@@ -214,3 +214,50 @@ describe('o PUT nao mexe nas versoes sem mudanca real', () => {
     assert.deepEqual(depois.professionals, antes.professionals);
   });
 });
+
+describe('os horarios de uma medicacao contam como conteudo dela', () => {
+  // Os horarios moram em medication_times, outra tabela. Sem tratamento, mudar so os
+  // horarios nao tocaria a linha da medicacao e a versao nao subiria: uma edicao
+  // concorrente dos horarios passaria despercebida.
+  const medWhere = "patient_id = 'pat-1' AND id = (SELECT min(id) FROM medications WHERE patient_id = 'pat-1')";
+  const timesOf = async () => (await run(`SELECT time, position FROM medication_times
+      WHERE patient_id = 'pat-1' AND medication_id = (SELECT min(id) FROM medications WHERE patient_id = 'pat-1') ORDER BY position`)).rows;
+
+  it('acrescentar um horario sobe a versao da medicacao', async () => {
+    const antes = await versionOf('medications', medWhere);
+    await run(`INSERT INTO medication_times (patient_id, medication_id, time, position)
+               VALUES ('pat-1', (SELECT min(id) FROM medications WHERE patient_id = 'pat-1'), '23:59', 99)`);
+    assert.equal(await versionOf('medications', medWhere), antes + 1);
+  });
+
+  it('regravar um horario com os mesmos valores nao sobe a versao (o PUT faz isso a cada salvamento)', async () => {
+    const antes = await versionOf('medications', medWhere);
+    await run(`UPDATE medication_times SET position = position WHERE patient_id = 'pat-1'
+               AND medication_id = (SELECT min(id) FROM medications WHERE patient_id = 'pat-1')`);
+    assert.equal(await versionOf('medications', medWhere), antes);
+  });
+
+  it('trocar a ordem dos horarios sobe a versao', async () => {
+    const times = await timesOf();
+    assert.ok(times.length >= 2, 'precisa de ao menos 2 horarios');
+    const antes = await versionOf('medications', medWhere);
+    await run(`UPDATE medication_times SET position = position + 100 WHERE patient_id = 'pat-1' AND time = $1
+               AND medication_id = (SELECT min(id) FROM medications WHERE patient_id = 'pat-1')`, [times[0].time]);
+    assert.equal(await versionOf('medications', medWhere), antes + 1);
+  });
+
+  it('remover um horario sobe a versao', async () => {
+    const antes = await versionOf('medications', medWhere);
+    await run(`DELETE FROM medication_times WHERE patient_id = 'pat-1' AND time = '23:59'
+               AND medication_id = (SELECT min(id) FROM medications WHERE patient_id = 'pat-1')`);
+    assert.equal(await versionOf('medications', medWhere), antes + 1);
+  });
+
+  it('apagar a medicacao leva os horarios junto, sem erro do gatilho', async () => {
+    await run(`INSERT INTO medications (patient_id, id, position, name) VALUES ('pat-1', 'med-gatilho-teste', 99, 'x')`);
+    await run(`INSERT INTO medication_times (patient_id, medication_id, time, position) VALUES ('pat-1', 'med-gatilho-teste', '10:00', 0)`);
+    await run("DELETE FROM medications WHERE patient_id = 'pat-1' AND id = 'med-gatilho-teste'");
+    const left = (await run("SELECT count(*)::int AS total FROM medication_times WHERE medication_id = 'med-gatilho-teste'")).rows[0].total;
+    assert.equal(left, 0);
+  });
+});

@@ -18,8 +18,8 @@ const json = { 'Content-Type': 'application/json', Origin: 'http://localhost:300
 // da API.
 const pool = createPool();
 
-const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1', at = base } = {}) => {
-  const headers = { ...json, 'X-Forwarded-For': ip };
+const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1', at = base, headers: extraHeaders = {} } = {}) => {
+  const headers = { ...json, 'X-Forwarded-For': ip, ...extraHeaders };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${at}${path}`, {
     method,
@@ -1310,5 +1310,272 @@ describe('Fase 2 / area 1: remetente das mensagens da equipe', () => {
     const message = patientOf(await staffState(staff), 'pat-1').messages.find(item => item.id === 'msg-area1-remetente');
     assert.equal(message.sender, 'equipe');
     assert.equal(message.senderName, 'Rafaely Carvalho');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fase 2, area 2: medicacoes e instrucoes. Criar, editar e apagar por chamadas
+// proprias, com o cabecalho If-Match carregando a versao lida (fase 1). Uma edicao
+// feita sobre uma versao velha responde 409 em vez de sobrescrever em silencio.
+
+const medBody = (over = {}) => ({
+  name: 'Dipirona', dose: '500mg', frequency: '6/6h', purpose: 'Dor', instructions: 'Apos a refeicao',
+  times: ['06:00', '12:00', '18:00'], ...over
+});
+const instrBody = (over = {}) => ({
+  category: 'curativo', title: 'Trocar o curativo', content: 'Uma vez ao dia, com soro.', important: false, ...over
+});
+
+const postItem = (kind, token, patientId, body) =>
+  call(`/api/patients/${patientId}/${kind}`, { method: 'POST', token, body });
+const patchItem = (kind, token, patientId, id, body, version) => call(`/api/patients/${patientId}/${kind}/${id}`, {
+  method: 'PATCH', token, body, headers: version === undefined ? {} : { 'If-Match': String(version) }
+});
+const deleteItem = (kind, token, patientId, id, version) => call(`/api/patients/${patientId}/${kind}/${id}`, {
+  method: 'DELETE', token, headers: version === undefined ? {} : { 'If-Match': String(version) }
+});
+const medicationOf = async (token, patientId, id) =>
+  patientOf(await staffState(token), patientId).medications.find(item => item.id === id);
+const instructionOf = async (token, patientId, id) =>
+  patientOf(await staffState(token), patientId).instructions.find(item => item.id === id);
+
+describe('Fase 2 / area 2: medicacoes', () => {
+  before(ensureOutsider);
+
+  it('a equipe cria; id e versao vem do servidor, e cada horario nasce nao tomado', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const created = await postItem('medications', staff, 'pat-1', { ...medBody(), id: 'med-forjado', version: 50 });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const { medication } = created.body;
+    assert.notEqual(medication.id, 'med-forjado');
+    assert.equal(medication.version, 1);
+    assert.equal(medication.name, 'Dipirona');
+    assert.deepEqual(medication.times, ['06:00', '12:00', '18:00']);
+    assert.deepEqual(medication.takenToday, { '06:00': false, '12:00': false, '18:00': false });
+
+    const read = await medicationOf(staff, 'pat-1', medication.id);
+    assert.equal(read.name, 'Dipirona');
+    assert.equal(read.version, 1);
+  });
+
+  it('repetir o mesmo clientId nao duplica a medicacao', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const body = { ...medBody({ name: 'Idempotente area2' }), clientId: 'med-cliente-area2' };
+    const first = await postItem('medications', staff, 'pat-1', body);
+    const second = await postItem('medications', staff, 'pat-1', body);
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 200);
+    assert.equal(second.body.medication.id, first.body.medication.id);
+    const copies = patientOf(await staffState(staff), 'pat-1').medications.filter(item => item.name === 'Idempotente area2');
+    assert.equal(copies.length, 1);
+  });
+
+  it('o paciente nao cria, edita nem apaga (403); quem nao ve o paciente recebe 404', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const patientToken = (await login('mariana')).token;
+    const outsider = (await login('Helena Duarte')).token;
+    const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Acesso area2' }))).body;
+    assert.equal((await postItem('medications', patientToken, 'pat-1', medBody())).status, 403);
+    assert.equal((await patchItem('medications', patientToken, 'pat-1', medication.id, { name: 'x' }, 1)).status, 403);
+    assert.equal((await deleteItem('medications', patientToken, 'pat-1', medication.id, 1)).status, 403);
+    assert.equal((await postItem('medications', outsider, 'pat-1', medBody())).status, 404);
+    assert.equal((await patchItem('medications', outsider, 'pat-1', medication.id, { name: 'x' }, 1)).status, 404);
+    assert.equal((await deleteItem('medications', outsider, 'pat-1', medication.id, 1)).status, 404);
+    assert.equal((await medicationOf(staff, 'pat-1', medication.id)).name, 'Acesso area2');
+  });
+
+  it('dados invalidos respondem 400', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const invalid = [
+      { name: '' }, { name: 'x'.repeat(101) }, { name: 42 },
+      { times: [] }, { times: ['25:00'] }, { times: ['8:00'] }, { times: ['06:00', '06:00'] },
+      { times: Array.from({ length: 13 }, (_, hour) => `${String(hour).padStart(2, '0')}:00`) },
+      { times: 'nao-e-lista' }, { dose: 7 }, { instructions: 'x'.repeat(501) }
+    ];
+    for (const over of invalid) {
+      const result = await postItem('medications', staff, 'pat-1', medBody(over));
+      assert.equal(result.status, 400, `deveria recusar ${JSON.stringify(over).slice(0, 60)}`);
+    }
+  });
+
+  it('editar com a versao certa sobe a versao e muda so o que veio', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Edicao area2' }))).body;
+    const patched = await patchItem('medications', staff, 'pat-1', medication.id, { dose: '1g', id: 'med-forjado', version: 99 }, medication.version);
+    assert.equal(patched.status, 200, JSON.stringify(patched.body));
+    assert.equal(patched.body.medication.version, medication.version + 1);
+    assert.equal(patched.body.medication.dose, '1g');
+    assert.equal(patched.body.medication.name, 'Edicao area2');
+    assert.equal(patched.body.medication.id, medication.id);
+    assert.deepEqual(patched.body.medication.times, medication.times);
+  });
+
+  it('sem If-Match responde 428; com versao velha responde 409, devolve a atual e nao grava', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Conflito area2' }))).body;
+    assert.equal((await patchItem('medications', staff, 'pat-1', medication.id, { dose: 'x' })).status, 428);
+
+    // A equipe le a versao 1; outra edicao a leva para a 2; a primeira chega atrasada.
+    assert.equal((await patchItem('medications', staff, 'pat-1', medication.id, { dose: 'primeira' }, 1)).status, 200);
+    const stale = await patchItem('medications', staff, 'pat-1', medication.id, { dose: 'atrasada' }, 1);
+    assert.equal(stale.status, 409, JSON.stringify(stale.body));
+    assert.equal(stale.body.current.version, 2);
+    assert.equal(stale.body.current.dose, 'primeira');
+    assert.equal((await medicationOf(staff, 'pat-1', medication.id)).dose, 'primeira');
+
+    // Cabecalho invalido nao vira conflito: e pedido malformado.
+    for (const header of ['abc', '1.5', '-1', '']) {
+      const result = await call(`/api/patients/pat-1/medications/${medication.id}`, {
+        method: 'PATCH', token: staff, body: { dose: 'x' }, headers: { 'If-Match': header }
+      });
+      assert.ok([400, 428].includes(result.status), `If-Match ${JSON.stringify(header)} deu ${result.status}`);
+    }
+  });
+
+  it('regravar os mesmos valores nao sobe a versao', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Igual area2' }))).body;
+    const same = await patchItem('medications', staff, 'pat-1', medication.id, { name: 'Igual area2', times: medication.times }, medication.version);
+    assert.equal(same.status, 200);
+    assert.equal(same.body.medication.version, medication.version);
+  });
+
+  it('mudar so os horarios tambem sobe a versao, e as doses ja tomadas dos horarios que ficam sao mantidas', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const patientToken = (await login('mariana')).token;
+    const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Horarios area2' }))).body;
+    const taken = await call('/api/medication-taken', {
+      method: 'POST', token: patientToken, body: { medicationId: medication.id, time: '06:00' }
+    });
+    assert.equal(taken.status, 200, JSON.stringify(taken.body));
+
+    const patched = await patchItem('medications', staff, 'pat-1', medication.id, { times: ['06:00', '09:00'] }, medication.version);
+    assert.equal(patched.status, 200, JSON.stringify(patched.body));
+    assert.equal(patched.body.medication.version, medication.version + 1, 'trocar os horarios nao subiu a versao');
+    assert.deepEqual(patched.body.medication.times, ['06:00', '09:00']);
+    assert.deepEqual(patched.body.medication.takenToday, { '06:00': true, '09:00': false });
+  });
+
+  it('apagar exige a versao: velha responde 409 e nao apaga; certa apaga', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Apagar area2' }))).body;
+    assert.equal((await deleteItem('medications', staff, 'pat-1', medication.id)).status, 428);
+    assert.equal((await patchItem('medications', staff, 'pat-1', medication.id, { dose: 'nova' }, 1)).status, 200);
+    assert.equal((await deleteItem('medications', staff, 'pat-1', medication.id, 1)).status, 409);
+    assert.ok(await medicationOf(staff, 'pat-1', medication.id), 'a medicacao foi apagada com versao velha');
+    assert.equal((await deleteItem('medications', staff, 'pat-1', medication.id, 2)).status, 200);
+    assert.equal(await medicationOf(staff, 'pat-1', medication.id), undefined);
+  });
+
+  it('medicacao ou paciente inexistente respondem 404', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    assert.equal((await patchItem('medications', staff, 'pat-1', 'med-que-nao-existe', { dose: 'x' }, 1)).status, 404);
+    assert.equal((await deleteItem('medications', staff, 'pat-1', 'med-que-nao-existe', 1)).status, 404);
+    assert.equal((await postItem('medications', staff, 'pat-que-nao-existe', medBody())).status, 404);
+  });
+
+  it('a aderencia do paciente e recalculada ao criar e ao apagar', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const before = patientOf(await staffState(staff), 'pat-1').medicationAdherencePercent;
+    const { medication } = (await postItem('medications', staff, 'pat-1', medBody({ name: 'Aderencia area2' }))).body;
+    const during = patientOf(await staffState(staff), 'pat-1').medicationAdherencePercent;
+    assert.ok(during <= before, 'um remedio novo, ainda nao tomado, nao pode aumentar a aderencia');
+    assert.equal((await deleteItem('medications', staff, 'pat-1', medication.id, medication.version)).status, 200);
+    assert.equal(patientOf(await staffState(staff), 'pat-1').medicationAdherencePercent, before);
+  });
+
+  it('o evento chega a equipe e ao paciente dono, sem o conteudo da medicacao', async () => {
+    const staffToken = (await login('Rafaely Carvalho')).token;
+    const staffStream = await openStream(staffToken);
+    const patientStream = await openStream((await login('mariana')).token);
+    try {
+      const created = await postItem('medications', staffToken, 'pat-1', medBody({ name: 'Evento area2 sigiloso' }));
+      assert.equal(created.status, 201);
+      for (const stream of [staffStream, patientStream]) {
+        assert.ok(await waitFor(() => stream.events.some(event => event.type === 'medication.changed')), 'faltou o evento');
+        const event = stream.events.find(item => item.type === 'medication.changed');
+        assert.equal(event.medicationId, created.body.medication.id);
+        assert.equal(event.change, 'created');
+        assert.ok(!JSON.stringify(event).includes('sigiloso'), 'o evento carrega o conteudo');
+      }
+    } finally {
+      staffStream.close();
+      patientStream.close();
+    }
+  });
+});
+
+describe('Fase 2 / area 2: instrucoes de pos-operatorio', () => {
+  before(ensureOutsider);
+
+  it('a equipe cria; id e versao vem do servidor, e o icone padrao e a categoria', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const created = await postItem('instructions', staff, 'pat-1', { ...instrBody(), id: 'inst-forjada', version: 50 });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const { instruction } = created.body;
+    assert.notEqual(instruction.id, 'inst-forjada');
+    assert.equal(instruction.version, 1);
+    assert.equal(instruction.iconName, 'curativo');
+    assert.equal((await instructionOf(staff, 'pat-1', instruction.id)).title, 'Trocar o curativo');
+  });
+
+  it('repetir o clientId nao duplica; paciente 403; quem nao ve o paciente 404', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const body = { ...instrBody({ title: 'Idempotente area2' }), clientId: 'inst-cliente-area2' };
+    const first = await postItem('instructions', staff, 'pat-1', body);
+    const second = await postItem('instructions', staff, 'pat-1', body);
+    assert.equal(first.status, 201);
+    assert.equal(second.status, 200);
+    assert.equal(second.body.instruction.id, first.body.instruction.id);
+    assert.equal(patientOf(await staffState(staff), 'pat-1').instructions.filter(item => item.title === 'Idempotente area2').length, 1);
+    assert.equal((await postItem('instructions', (await login('mariana')).token, 'pat-1', instrBody())).status, 403);
+    assert.equal((await postItem('instructions', (await login('Helena Duarte')).token, 'pat-1', instrBody())).status, 404);
+  });
+
+  it('dados invalidos respondem 400', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    for (const over of [
+      { title: '' }, { title: 'x'.repeat(121) }, { category: 'inventada' }, { category: undefined },
+      { content: 'x'.repeat(2_001) }, { important: 'sim' }, { iconName: 'x'.repeat(51) }
+    ]) {
+      assert.equal((await postItem('instructions', staff, 'pat-1', instrBody(over))).status, 400, `deveria recusar ${JSON.stringify(over).slice(0, 60)}`);
+    }
+  });
+
+  it('editar com a versao certa sobe; sem If-Match 428; velha 409 com a atual e sem gravar', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { instruction } = (await postItem('instructions', staff, 'pat-1', instrBody({ title: 'Conflito area2' }))).body;
+    assert.equal((await patchItem('instructions', staff, 'pat-1', instruction.id, { content: 'x' })).status, 428);
+
+    const ok = await patchItem('instructions', staff, 'pat-1', instruction.id, { content: 'primeira', important: true }, 1);
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal(ok.body.instruction.version, 2);
+    assert.equal(ok.body.instruction.important, true);
+    assert.equal(ok.body.instruction.title, 'Conflito area2');
+
+    const stale = await patchItem('instructions', staff, 'pat-1', instruction.id, { content: 'atrasada' }, 1);
+    assert.equal(stale.status, 409);
+    assert.equal(stale.body.current.version, 2);
+    assert.equal((await instructionOf(staff, 'pat-1', instruction.id)).content, 'primeira');
+  });
+
+  it('regravar os mesmos valores nao sobe a versao', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { instruction } = (await postItem('instructions', staff, 'pat-1', instrBody({ title: 'Igual area2' }))).body;
+    const same = await patchItem('instructions', staff, 'pat-1', instruction.id, { title: 'Igual area2' }, instruction.version);
+    assert.equal(same.status, 200);
+    assert.equal(same.body.instruction.version, instruction.version);
+  });
+
+  it('apagar exige a versao; instrucao inexistente responde 404', async () => {
+    const staff = (await login('Rafaely Carvalho')).token;
+    const { instruction } = (await postItem('instructions', staff, 'pat-1', instrBody({ title: 'Apagar area2' }))).body;
+    assert.equal((await deleteItem('instructions', staff, 'pat-1', instruction.id)).status, 428);
+    assert.equal((await patchItem('instructions', staff, 'pat-1', instruction.id, { content: 'y' }, 1)).status, 200);
+    assert.equal((await deleteItem('instructions', staff, 'pat-1', instruction.id, 1)).status, 409);
+    assert.ok(await instructionOf(staff, 'pat-1', instruction.id));
+    assert.equal((await deleteItem('instructions', staff, 'pat-1', instruction.id, 2)).status, 200);
+    assert.equal(await instructionOf(staff, 'pat-1', instruction.id), undefined);
+    assert.equal((await deleteItem('instructions', staff, 'pat-1', 'inst-que-nao-existe', 1)).status, 404);
   });
 });
