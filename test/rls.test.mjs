@@ -127,7 +127,9 @@ describe('negacao em tabelas filhas', () => {
 
   it('paciente nao ve a equipe de outro paciente', async () => {
     assert.equal(await count(patient('pat-1'), 'SELECT count(*)::int AS total FROM patient_care_team'), 2);
-    assert.equal(await count(patient('pat-2'), 'SELECT count(*)::int AS total FROM patient_care_team'), 0);
+    // pat-2 enxerga so as linhas da propria equipe (prof-1), nunca as de pat-1.
+    assert.equal(await count(patient('pat-2'), 'SELECT count(*)::int AS total FROM patient_care_team'), 1);
+    assert.equal(await count(patient('pat-2'), "SELECT count(*)::int AS total FROM patient_care_team WHERE patient_id <> 'pat-2'"), 0);
   });
 });
 
@@ -447,10 +449,10 @@ describe('I9: a equipe do paciente nao se esvazia por baixo', () => {
 
 describe('I9: visibilidade fail-closed', () => {
   // Copia pat-3 com outro id/e-mail/nome. Serve para criar um paciente sem montar as 28 colunas.
-  const insertCopy = (session, id) => run(session,
-    `INSERT INTO patients SELECT (jsonb_populate_record(NULL::patients, to_jsonb(p) || $1::jsonb)).*
-       FROM patients p WHERE p.id = 'pat-3'`,
-    [JSON.stringify({ id, email: `${id}@x.com`, name: `Temp ${id}` })]);
+  const insertCopy = (session, id, source = 'pat-3') => run(session,
+    `INSERT INTO patients SELECT (jsonb_populate_record(NULL::patients, to_jsonb(p) || $2::jsonb)).*
+       FROM patients p WHERE p.id = $1`,
+    [source, JSON.stringify({ id, email: `${id}@x.com`, name: `Temp ${id}` })]);
   const cleanup = () => run(admin, "DELETE FROM patients WHERE id LIKE 'pat-%-i9'");
   after(cleanup);
 
@@ -501,7 +503,9 @@ describe('I9: visibilidade fail-closed', () => {
 
   it('o paciente nao cria paciente', async () => {
     await cleanup();
-    await assert.rejects(() => insertCopy(patient('pat-1'), 'pat-intruso-i9'), error => error.code === '42501');
+    // A origem e o proprio pat-1: um paciente so enxerga o proprio registro, e com origem
+    // invisivel o INSERT nao inseriria linha alguma e nao haveria o que recusar.
+    await assert.rejects(() => insertCopy(patient('pat-1'), 'pat-intruso-i9', 'pat-1'), error => error.code === '42501');
     await cleanup();
   });
 

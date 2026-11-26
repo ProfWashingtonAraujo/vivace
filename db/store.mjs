@@ -390,40 +390,37 @@ const storePassword = async (client, accountId, role, password) => {
   await client.query('SELECT app_set_credential($1, $2, $3)', [accountId, role, passwordHash]);
 };
 
+const PATIENT_COLUMNS = [
+  'id', 'name', 'age', 'gender', 'avatar', 'email', 'phone', 'cpf', 'procedure', 'surgery_date', 'discharge_date',
+  'hospital', 'anesthesia_type', 'allergies', 'status', 'post_op_day', 'last_check_in_time', 'current_pain',
+  'current_temp', 'blood_pressure', 'heart_rate', 'wound_review_pending', 'medication_adherence_percent',
+  'emergency_contact_name', 'emergency_contact_phone', 'emergency_contact_relationship', 'position', 'surgeon_label'
+];
+
 const writePatient = async (client, patient, { role, userId }) => {
   const contact = patient.emergencyContact ?? {};
-  await client.query(
-    `INSERT INTO patients (
-       id, name, age, gender, avatar, email, phone, cpf, procedure, surgery_date, discharge_date,
-       hospital, anesthesia_type, allergies, status, post_op_day, last_check_in_time, current_pain,
-       current_temp, blood_pressure, heart_rate, wound_review_pending, medication_adherence_percent,
-       emergency_contact_name, emergency_contact_phone, emergency_contact_relationship,
-       position, surgeon_label)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
-     ON CONFLICT (id) DO UPDATE SET
-       name = EXCLUDED.name, age = EXCLUDED.age, gender = EXCLUDED.gender, avatar = EXCLUDED.avatar,
-       email = EXCLUDED.email, phone = EXCLUDED.phone, cpf = EXCLUDED.cpf, procedure = EXCLUDED.procedure,
-       surgery_date = EXCLUDED.surgery_date, discharge_date = EXCLUDED.discharge_date,
-       hospital = EXCLUDED.hospital, anesthesia_type = EXCLUDED.anesthesia_type,
-       allergies = EXCLUDED.allergies, status = EXCLUDED.status, post_op_day = EXCLUDED.post_op_day,
-       last_check_in_time = EXCLUDED.last_check_in_time, current_pain = EXCLUDED.current_pain,
-       current_temp = EXCLUDED.current_temp, blood_pressure = EXCLUDED.blood_pressure,
-       heart_rate = EXCLUDED.heart_rate, wound_review_pending = EXCLUDED.wound_review_pending,
-       medication_adherence_percent = EXCLUDED.medication_adherence_percent,
-       emergency_contact_name = EXCLUDED.emergency_contact_name,
-       emergency_contact_phone = EXCLUDED.emergency_contact_phone,
-       emergency_contact_relationship = EXCLUDED.emergency_contact_relationship,
-       position = EXCLUDED.position, surgeon_label = EXCLUDED.surgeon_label`,
-    [patient.id, patient.name, patient.age ?? 0, patient.gender ?? '', patient.avatar ?? '',
-      patient.email, patient.phone ?? '', patient.cpf ?? '', patient.procedure ?? '',
-      patient.surgeryDate ?? '', patient.dischargeDate ?? '', patient.hospital ?? '',
-      patient.anesthesiaType ?? '', patient.allergies ?? [], patient.status ?? 'estavel',
-      patient.postOpDay ?? 0, patient.lastCheckInTime ?? '', patient.currentPain ?? 0,
-      patient.currentTemp ?? 36.5, patient.bloodPressure ?? '', patient.heartRate ?? 0,
-      patient.woundReviewPending ?? false, medicationAdherence(patient.medications ?? []),
-      contact.name ?? '', contact.phone ?? '', contact.relationship ?? '',
-      patient.position ?? 0, patient.surgeon ?? '']
-  );
+  const values = [patient.id, patient.name, patient.age ?? 0, patient.gender ?? '', patient.avatar ?? '',
+    patient.email, patient.phone ?? '', patient.cpf ?? '', patient.procedure ?? '',
+    patient.surgeryDate ?? '', patient.dischargeDate ?? '', patient.hospital ?? '',
+    patient.anesthesiaType ?? '', patient.allergies ?? [], patient.status ?? 'estavel',
+    patient.postOpDay ?? 0, patient.lastCheckInTime ?? '', patient.currentPain ?? 0,
+    patient.currentTemp ?? 36.5, patient.bloodPressure ?? '', patient.heartRate ?? 0,
+    patient.woundReviewPending ?? false, medicationAdherence(patient.medications ?? []),
+    contact.name ?? '', contact.phone ?? '', contact.relationship ?? '',
+    patient.position ?? 0, patient.surgeon ?? ''];
+  // UPDATE primeiro e INSERT so se nenhuma linha foi atualizada, em vez de um upsert
+  // (INSERT ... ON CONFLICT DO UPDATE). O upsert faz a linha PROPOSTA passar pela policy de
+  // leitura, e um profissional que cria um paciente so entra na equipe (e portanto so passa
+  // a enxerga-lo) depois do INSERT, pelo gatilho app_join_team_on_create.
+  const assignments = PATIENT_COLUMNS.slice(1).map((column, index) => `${column} = $${index + 2}`).join(', ');
+  const updated = await client.query(`UPDATE patients SET ${assignments} WHERE id = $1`, values);
+  if (updated.rowCount === 0) {
+    await client.query(
+      `INSERT INTO patients (${PATIENT_COLUMNS.join(', ')})
+       VALUES (${PATIENT_COLUMNS.map((_, index) => `$${index + 1}`).join(', ')})`,
+      values
+    );
+  }
   await storePassword(client, patient.id, 'patient', patient.password);
 
   // O vinculo de acesso vem do rotulo de cirurgiao, como o import faz. Se nao
