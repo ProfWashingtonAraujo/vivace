@@ -1,5 +1,5 @@
 import { createHash, randomUUID, scrypt as scryptCallback } from 'node:crypto';
-import { readAggregate, readMedications, readPatient } from './aggregate.mjs';
+import { adminOf, professionalOf, readAggregate, readMedications, readPatient } from './aggregate.mjs';
 import { asAdmin, createPool, withSession } from './session.mjs';
 import { exceedsDeletionLimit, idsMarkedRead } from '../lib/state-guards.mjs';
 import { brDateTime } from '../lib/br-time.mjs';
@@ -1072,6 +1072,7 @@ export const deletePatient = (session, { patientId, version }) =>
       if (!current) throw notFound();
       throw versionConflict(current);
     }
+    await dropSessions(client, 'patient', patientId);
     return { id: patientId };
   });
 
@@ -1105,4 +1106,153 @@ export const setCareTeam = (session, { patientId, professionalIds }) =>
       );
     }
     return { careTeam: professionalIds.map((professionalId, index) => ({ professionalId, role: index === 0 ? 'cirurgiao' : 'equipe' })) };
+  });
+
+// -------------------------------- profissionais, administradores e status (areas 4 e 5)
+//
+// Cadastro de profissionais e administradores por chamadas proprias, so para o admin, com
+// a mesma versao (If-Match) das demais entidades. Apagar uma conta tambem encerra as
+// sessoes dela. O status do paciente tem chamada propria, sem versao: dois lados o
+// escrevem (a equipe e o recalculo do check-in) e vale o ultimo.
+
+const adminOrThrow = session => {
+  if (session.role !== 'admin') throw denied();
+};
+
+const dropSessions = (client, role, userId) =>
+  client.query('DELETE FROM sessions WHERE role = $1 AND user_id = $2', [role, userId]);
+
+// Estrutura comum a profissional e administrador: so muda a tabela, as colunas e o papel.
+const people = {
+  professional: {
+    table: 'professionals', role: 'professional', label: 'Professional', of: professionalOf, prefix: 'prof',
+    columns: { name: 'name', email: 'email', role: 'job_title', crmCoren: 'crm_coren', specialty: 'specialty', avatar: 'avatar' }
+  },
+  admin: {
+    table: 'admins', role: 'admin', label: 'Administrator', of: adminOf, prefix: 'adm',
+    columns: { name: 'name', email: 'email' }
+  }
+};
+
+const readPerson = async (client, kind, id) => {
+  const { rows } = await client.query(`SELECT * FROM ${people[kind].table} WHERE id = $1`, [id]);
+  return rows[0] ? people[kind].of(rows[0]) : null;
+};
+
+const createPerson = (kind, session, { values, password, clientId }) =>
+  withSession(pool, session, async client => {
+    adminOrThrow(session);
+    const config = people[kind];
+    const id = clientId ?? `${config.prefix}-${randomUUID()}`;
+    const existing = await readPerson(client, kind, id);
+    if (existing) return { [kind]: existing, created: false };
+    try {
+      if (kind === 'professional') {
+        await client.query(
+          `INSERT INTO professionals (id, name, job_title, crm_coren, avatar, email, specialty, position)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, (SELECT coalesce(max(position) + 1, 0) FROM professionals))`,
+          [id, values.name, values.role, values.crmCoren, values.avatar || defaultAvatar(values.name), values.email, values.specialty]
+        );
+      } else {
+        await client.query(
+          'INSERT INTO admins (id, name, email, position) VALUES ($1, $2, $3, (SELECT coalesce(max(position) + 1, 0) FROM admins))',
+          [id, values.name, values.email]
+        );
+      }
+      await storePassword(client, id, config.role, password);
+    } catch (error) {
+      rethrowPatientError(error);
+    }
+    return { [kind]: await readPerson(client, kind, id), created: true };
+  });
+
+const updatePerson = (kind, session, { id, values, version }) =>
+  withSession(pool, session, async client => {
+    adminOrThrow(session);
+    const config = people[kind];
+    const before = await readPerson(client, kind, id);
+    if (!before) throw notFoundOf(config.label);
+    const assignments = [];
+    const params = [id, version];
+    for (const [field, column] of Object.entries(config.columns)) {
+      if (!(field in values)) continue;
+      params.push(field === 'avatar' && values.avatar === '' ? defaultAvatar(values.name ?? before.name) : values[field]);
+      assignments.push(`${column} = $${params.length}`);
+    }
+    try {
+      const updated = await client.query(
+        `UPDATE ${config.table} SET ${assignments.length ? assignments.join(', ') : 'name = name'}
+          WHERE id = $1 AND version = $2 RETURNING id`,
+        params
+      );
+      if (!updated.rows[0]) throw versionConflict(await readPerson(client, kind, id));
+    } catch (error) {
+      if (error.statusCode) throw error;
+      rethrowPatientError(error);
+    }
+    const item = await readPerson(client, kind, id);
+    return { [kind]: item, changed: item.version !== version };
+  });
+
+const setPersonPassword = (kind, session, { id, password }) =>
+  withSession(pool, session, async client => {
+    adminOrThrow(session);
+    if (!(await readPerson(client, kind, id))) throw notFoundOf(people[kind].label);
+    await storePassword(client, id, people[kind].role, password);
+    await dropSessions(client, people[kind].role, id);
+    return { id };
+  });
+
+export const createProfessional = (session, input) => createPerson('professional', session, input);
+export const updateProfessional = (session, input) => updatePerson('professional', session, input);
+export const setProfessionalPassword = (session, input) => setPersonPassword('professional', session, input);
+export const createAdmin = (session, input) => createPerson('admin', session, input);
+export const updateAdmin = (session, input) => updatePerson('admin', session, input);
+export const setAdminPassword = (session, input) => setPersonPassword('admin', session, input);
+
+// Apagar um profissional leva a equipe dele junto (cascata); os pacientes em que ele era o
+// unico membro ficam sem equipe e so o admin os ve. A lista volta na resposta, para o admin
+// saber a quem atribuir uma equipe.
+export const deleteProfessional = (session, { id, version }) =>
+  withSession(pool, session, async client => {
+    adminOrThrow(session);
+    const orphaned = await client.query(
+      `SELECT t.patient_id FROM patient_care_team t
+        WHERE t.professional_id = $1
+          AND NOT EXISTS (SELECT 1 FROM patient_care_team o WHERE o.patient_id = t.patient_id AND o.professional_id <> $1)
+        ORDER BY t.patient_id`,
+      [id]
+    );
+    const removed = await client.query('DELETE FROM professionals WHERE id = $1 AND version = $2 RETURNING id', [id, version]);
+    if (!removed.rows[0]) {
+      const current = await readPerson(client, 'professional', id);
+      if (!current) throw notFoundOf('Professional');
+      throw versionConflict(current);
+    }
+    await dropSessions(client, 'professional', id);
+    return { id, patientsWithoutTeam: orphaned.rows.map(row => row.patient_id) };
+  });
+
+// Nunca apaga o ultimo administrador. O lock serializa duas exclusoes simultaneas: sem ele,
+// cada uma veria dois administradores e as duas passariam, deixando zero.
+export const deleteAdmin = (session, { id, version }) =>
+  withSession(pool, session, async client => {
+    adminOrThrow(session);
+    await client.query("SELECT pg_advisory_xact_lock(hashtext('vivace-admins'))");
+    const current = await readPerson(client, 'admin', id);
+    if (!current) throw notFoundOf('Administrator');
+    if (current.version !== version) throw versionConflict(current);
+    const total = (await client.query('SELECT count(*)::int AS total FROM admins')).rows[0].total;
+    if (total <= 1) throw conflict('Last administrator', 'Não é possível apagar o último administrador');
+    await client.query('DELETE FROM admins WHERE id = $1', [id]);
+    await dropSessions(client, 'admin', id);
+    return { id };
+  });
+
+export const setPatientStatus = (session, { patientId, status }) =>
+  withSession(pool, session, async client => {
+    staffOrThrow(session);
+    const updated = await client.query('UPDATE patients SET status = $2 WHERE id = $1 RETURNING status', [patientId, status]);
+    if (!updated.rows[0]) throw notFound();
+    return { status: updated.rows[0].status };
   });

@@ -106,7 +106,8 @@ const stripVersions = state => ({
     medications: medications.map(({ version: medicationVersion, ...medication }) => medication),
     instructions: instructions.map(({ version: instructionVersion, ...instruction }) => instruction)
   })),
-  professionals: state.professionals.map(({ version, ...professional }) => professional)
+  professionals: state.professionals.map(({ version, ...professional }) => professional),
+  admins: state.admins.map(({ version, ...admin }) => admin)
 });
 
 const main = async () => {

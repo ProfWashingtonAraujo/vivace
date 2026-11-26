@@ -15,6 +15,7 @@ import { removesLastAdmin } from './lib/state-guards.mjs';
 import { validateNote, validateReview } from './lib/staff-actions.mjs';
 import { parseIfMatch, validateInstruction, validateMedication } from './lib/catalog.mjs';
 import { validateCareTeam, validatePassword, validatePatient } from './lib/patient.mjs';
+import { validateAdmin, validateProfessional, validateStatus } from './lib/people.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
@@ -643,6 +644,106 @@ const handleRequest = async (request, response) => {
         error: failureMessage(error, 'Could not save patient'),
         ...(error.current ? { current: error.current } : {})
       });
+    }
+    return;
+  }
+
+  // Profissionais e administradores (fase 2, área 4): só o admin. Mesma mecânica das demais
+  // entidades versionadas: If-Match em PATCH e DELETE (428, 400 ou 409 com o item atual).
+  const people = {
+    professionals: {
+      entity: 'professional', validate: validateProfessional,
+      create: store.createProfessional, update: store.updateProfessional, remove: store.deleteProfessional, password: store.setProfessionalPassword
+    },
+    admins: {
+      entity: 'admin', validate: validateAdmin,
+      create: store.createAdmin, update: store.updateAdmin, remove: store.deleteAdmin, password: store.setAdminPassword
+    }
+  };
+  const peopleRoute = /^\/api\/(professionals|admins)(?:\/([^/]+)(\/password)?)?$/.exec(pathname);
+  const peopleAction = !peopleRoute ? null
+    : peopleRoute[2] === undefined ? (request.method === 'POST' ? 'create' : null)
+      : peopleRoute[3] ? (request.method === 'PUT' ? 'password' : null)
+        : ({ PATCH: 'update', DELETE: 'delete' })[request.method] ?? null;
+  if (peopleAction) {
+    const session = await authorize(request, response);
+    if (!session) return;
+    if (session.role !== 'admin') {
+      forbidden(request, response);
+      return;
+    }
+    const kind = people[peopleRoute[1]];
+    try {
+      const id = peopleRoute[2] === undefined ? undefined : pathId(peopleRoute[2]);
+      if (peopleRoute[2] !== undefined && !id) {
+        json(request, response, 404, { error: `${kind.entity} not found` });
+        return;
+      }
+      const invalid = () => json(request, response, 400, { error: `Invalid ${kind.entity}` });
+
+      if (peopleAction === 'create') {
+        const input = kind.validate(parseJson(await readBody(request, bodyLimits.patient)));
+        if (!input.ok) return invalid();
+        const { [kind.entity]: item, created } = await kind.create(session, { values: input.values, password: input.password, clientId: input.clientId });
+        json(request, response, created ? 201 : 200, { [kind.entity]: item });
+        return;
+      }
+      if (peopleAction === 'password') {
+        const input = validatePassword(parseJson(await readBody(request, bodyLimits.message)));
+        if (!input.ok) return invalid();
+        json(request, response, 200, await kind.password(session, { id, password: input.password }));
+        return;
+      }
+      const precondition = parseIfMatch(request.headers['if-match']);
+      if (!precondition.ok) {
+        const missing = precondition.reason === 'missing';
+        json(request, response, missing ? 428 : 400, { error: missing ? failureMessage({ statusCode: 428 }, '') : 'If-Match inválido' });
+        return;
+      }
+      if (peopleAction === 'update') {
+        const input = kind.validate(parseJson(await readBody(request, bodyLimits.patient)), { partial: true });
+        if (!input.ok) return invalid();
+        const { [kind.entity]: item } = await kind.update(session, { id, values: input.values, version: precondition.version });
+        json(request, response, 200, { [kind.entity]: item });
+        return;
+      }
+      json(request, response, 200, { deleted: true, ...(await kind.remove(session, { id, version: precondition.version })) });
+    } catch (error) {
+      console.error('People API error:', error);
+      json(request, response, failureStatus(error), {
+        error: failureMessage(error, `Could not save ${kind.entity}`),
+        ...(error.current ? { current: error.current } : {})
+      });
+    }
+    return;
+  }
+
+  // Status do paciente (fase 2, área 5): só a equipe com acesso, sem versão (a equipe e o
+  // recálculo do check-in o escrevem, e vale o último).
+  const statusRoute = /^\/api\/patients\/([^/]+)\/status$/.exec(pathname);
+  if (statusRoute && request.method === 'PUT') {
+    const session = await authorize(request, response);
+    if (!session) return;
+    if (session.role === 'patient') {
+      forbidden(request, response);
+      return;
+    }
+    try {
+      const patientId = pathId(statusRoute[1]);
+      if (!patientId) {
+        json(request, response, 404, { error: 'Patient not found' });
+        return;
+      }
+      const input = validateStatus(parseJson(await readBody(request, bodyLimits.message)));
+      if (!input.ok) {
+        json(request, response, 400, { error: 'Invalid status' });
+        return;
+      }
+      json(request, response, 200, await store.setPatientStatus(session, { patientId, status: input.status }));
+      publishSafely({ type: 'patient.changed', patientId, change: 'updated' });
+    } catch (error) {
+      console.error('Status API error:', error);
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not save status') });
     }
     return;
   }

@@ -266,6 +266,14 @@ O servidor decide id, versão, status (`estavel`), sinais, dia de pós-operatór
 
 Quem cria entra na equipe como cirurgião (gatilho do banco). O admin cria sem equipe, ou com `professionalIds` (o primeiro é o cirurgião, os demais são equipe). `PUT .../care-team` substitui a equipe: lista vazia deixa o paciente sem equipe, e então só o admin o vê; um profissional que não existe responde `404`, e um que não é admin responde `403`. `PATCH` e `DELETE` seguem as regras de `If-Match` das medicações (`428`, `400`, `409` com o item atual).
 
+### Profissionais, administradores e status (fase 2, áreas 4 e 5)
+
+Só o **admin** cadastra profissionais e administradores. `POST /api/professionals` e `POST /api/admins` (`{ name, email, password, ... }`, mais `role`, `crmCoren`, `specialty` e `avatar` para o profissional), `PATCH` e `DELETE` em `/:id` com `If-Match` (as mesmas regras `428`, `400` e `409` com o item atual das demais entidades; a migração `019` deu `version` aos administradores) e `PUT /:id/password`. Id, versão e posição são do servidor; e-mail repetido responde `409`; trocar a senha ou apagar a conta encerra as sessões dela.
+
+Apagar um **profissional** leva a equipe dele junto, e os pacientes em que ele era o único membro ficam sem equipe (só o admin os vê). A resposta traz `patientsWithoutTeam` com os ids, para o admin saber a quem atribuir uma equipe. Apagar o **último administrador** responde `409`; um lock serializa duas exclusões simultâneas, que de outro modo passariam as duas.
+
+`PUT /api/patients/:id/status` com `{ status }` (`estavel`, `atencao` ou `critico`) é da equipe com acesso ao paciente (`403` para o paciente, `404` para quem não o vê). Não tem `If-Match`: a equipe e o recálculo do check-in (pela dor e pela temperatura) escrevem o status, e vale o último. Ela **não** registra evento na linha do tempo: o front indexa `timelineKinds[event.type]`, e um tipo novo quebraria a tela; isso fica para a fase 3, junto com o tipo no front. Apagar um paciente agora também encerra as sessões dele.
+
 ### Administrador inicial
 
 O primeiro administrador é criado por `app_bootstrap_admin` (migração `014`), uma função `SECURITY DEFINER` chamada com o papel `vivace_api`. Ela só cria quando **não existe nenhum administrador**, de forma atômica (duas chamadas simultâneas não criam duas contas) e nunca altera uma conta existente nem a senha dela. O servidor a chama uma vez na subida e memoiza o sucesso; antes ela rodava a cada login, abrindo uma conexão de dono do banco só para perguntar se já havia admin. A conversão de uma senha antiga em texto plano para `scrypt` passa por `app_set_credential`, o mesmo caminho de escrita das senhas do `PUT`.

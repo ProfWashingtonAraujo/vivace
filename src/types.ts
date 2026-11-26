@@ -131,6 +131,8 @@ export interface ProfessionalUser {
 }
 
 export interface AdminUser {
+  /** Versão da linha no banco; sobe só quando o conteúdo muda. Preenchida pelo servidor. */
+  version?: number;
   id: string;
   name: string;
   email: string;

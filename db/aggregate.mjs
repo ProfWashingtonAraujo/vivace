@@ -187,23 +187,25 @@ const readPatients = async (client, patientId = null) => {
   });
 };
 
+// A forma de um profissional e de um administrador na API: a mesma na leitura do estado e nas
+// respostas das chamadas proprias.
+export const professionalOf = row => ({
+  id: row.id,
+  name: row.name,
+  role: row.job_title,
+  crmCoren: row.crm_coren,
+  avatar: row.avatar,
+  email: row.email,
+  specialty: row.specialty,
+  version: row.version
+});
+
+export const adminOf = row => ({ id: row.id, name: row.name, email: row.email, version: row.version });
+
 export const readAggregate = async client => ({
   patients: await readPatients(client),
-  professionals: (await client.query('SELECT * FROM professionals ORDER BY position')).rows.map(row => ({
-    id: row.id,
-    name: row.name,
-    role: row.job_title,
-    crmCoren: row.crm_coren,
-    avatar: row.avatar,
-    email: row.email,
-    specialty: row.specialty,
-    version: row.version
-  })),
-  admins: (await client.query('SELECT * FROM admins ORDER BY position')).rows.map(row => ({
-    id: row.id,
-    name: row.name,
-    email: row.email
-  }))
+  professionals: (await client.query('SELECT * FROM professionals ORDER BY position')).rows.map(professionalOf),
+  admins: (await client.query('SELECT * FROM admins ORDER BY position')).rows.map(adminOf)
 });
 
 // Um paciente so. Devolve null quando o RLS esconde o registro, que e o mesmo
