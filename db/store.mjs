@@ -314,7 +314,7 @@ export const toggleMedicationTaken = (session, { patientId, medicationId, time }
     await client.query(
       `INSERT INTO medication_doses (patient_id, medication_id, time, taken, taken_on) VALUES ($1,$2,$3,true,$4)
        ON CONFLICT (patient_id, medication_id, time) DO UPDATE
-         SET taken = NOT (medication_doses.taken AND medication_doses.taken_on = $4), taken_on = $4`,
+         SET taken = NOT coalesce(medication_doses.taken AND medication_doses.taken_on = $4, false), taken_on = $4`,
       [patientId, medicationId, time, today]
     );
     const updated = medicationAdherence((await readPatient(client, patientId)).medications);

@@ -1935,4 +1935,15 @@ describe('Dose tomada: so o paciente marca, e so vale no dia', () => {
     assert.equal((await call('/api/medication-taken', { method: 'POST', token, body: slot })).status, 200);
     assert.equal(await takenNow(token), true);
   });
+
+  it('dose antiga marcada sem dia (anterior a migracao 020): clicar marca hoje, nao da erro', async () => {
+    const token = (await login('mariana')).token;
+    const slot = await firstSlot(token);
+    await withSession(pool, adminSession, client => client.query(
+      "UPDATE medication_doses SET taken = true, taken_on = NULL WHERE patient_id = 'pat-1' AND medication_id = $1 AND time = $2",
+      [slot.medicationId, slot.time]));
+    assert.equal(await takenNow(token), false, 'a marca sem dia apareceu como tomada');
+    assert.equal((await call('/api/medication-taken', { method: 'POST', token, body: slot })).status, 200);
+    assert.equal(await takenNow(token), true);
+  });
 });
