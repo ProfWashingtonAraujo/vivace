@@ -37,12 +37,14 @@ const readMedications = (medications, times, doses) => medications.map(medicatio
     purpose: medication.purpose,
     instructions: medication.instructions,
     times: medicationTimes.map(time => time.time),
-    takenToday
+    takenToday,
+    version: medication.version
   };
 });
 
 const buildPatient = (row, { timeline, photos, medications, times, doses, checkIns, messages, instructions, notes, surgeon }) => ({
   id: row.id,
+  version: row.version,
   name: row.name,
   age: row.age,
   gender: row.gender,
@@ -118,7 +120,8 @@ const buildPatient = (row, { timeline, photos, medications, times, doses, checkI
     title: instruction.title,
     content: instruction.content,
     iconName: instruction.icon_name,
-    important: instruction.important
+    important: instruction.important,
+    version: instruction.version
   })),
   clinicalNotes: ordered(notes).map(note => ({
     id: note.id,
@@ -192,7 +195,8 @@ export const readAggregate = async client => ({
     crmCoren: row.crm_coren,
     avatar: row.avatar,
     email: row.email,
-    specialty: row.specialty
+    specialty: row.specialty,
+    version: row.version
   })),
   admins: (await client.query('SELECT * FROM admins ORDER BY position')).rows.map(row => ({
     id: row.id,

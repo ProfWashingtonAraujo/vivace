@@ -25,6 +25,8 @@ export interface WoundPhoto {
 }
 
 export interface MedicationItem {
+  /** Versão da linha no banco; sobe só quando o conteúdo muda. Preenchida pelo servidor. */
+  version?: number;
   id: string;
   name: string;
   dose: string;
@@ -58,6 +60,8 @@ export interface ChatMessage {
 }
 
 export interface PostOpInstruction {
+  /** Versão da linha no banco; sobe só quando o conteúdo muda. Preenchida pelo servidor. */
+  version?: number;
   id: string;
   category: 'curativo' | 'alimentacao' | 'atividade' | 'higiene' | 'alerta' | 'medicacao';
   title: string;
@@ -67,6 +71,8 @@ export interface PostOpInstruction {
 }
 
 export interface Patient {
+  /** Versão da linha no banco; sobe só quando o conteúdo muda. Preenchida pelo servidor. */
+  version?: number;
   id: string;
   name: string;
   age: number;
@@ -112,6 +118,8 @@ export interface Patient {
 }
 
 export interface ProfessionalUser {
+  /** Versão da linha no banco; sobe só quando o conteúdo muda. Preenchida pelo servidor. */
+  version?: number;
   id: string;
   name: string;
   role: string;

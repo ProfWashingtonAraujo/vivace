@@ -95,6 +95,18 @@ const compare = (expected, actual, path) => {
   differences.push(`${path}: JSON=${preview(expected)} banco=${preview(actual)}`);
 };
 
+// `version` e metadado do banco (migracao 016): nao existe no JSON de origem, entao sai
+// da comparacao.
+const stripVersions = state => ({
+  ...state,
+  patients: state.patients.map(({ version, medications, instructions, ...patient }) => ({
+    ...patient,
+    medications: medications.map(({ version: medicationVersion, ...medication }) => medication),
+    instructions: instructions.map(({ version: instructionVersion, ...instruction }) => instruction)
+  })),
+  professionals: state.professionals.map(({ version, ...professional }) => professional)
+});
+
 const main = async () => {
   const source = JSON.parse(await readFile(stateFile, 'utf8'));
   // Sob contexto admin: o RLS vale ate para o dono da tabela, entao uma leitura
@@ -102,7 +114,7 @@ const main = async () => {
   const pool = createMigrationPool();
   let actual;
   try {
-    actual = await asAdmin(pool, client => readAggregate(client));
+    actual = stripVersions(await asAdmin(pool, client => readAggregate(client)));
   } finally {
     await pool.end();
   }
