@@ -1977,6 +1977,7 @@ describe('Saturacao no check-in e reabertura do check-in pela equipe', () => {
     await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-first', { spo2: 96 }) });
     const result = await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-none') });
     assert.equal(result.status, 201);
+    assert.equal(result.body.patient.status, 'estavel', 'sem oximetro o paciente nao pode virar critico');
     assert.equal(result.body.patient.checkIns[0].spo2, null);
     assert.equal(result.body.patient.currentSpo2, 96);
   });
@@ -2014,5 +2015,55 @@ describe('Saturacao no check-in e reabertura do check-in pela equipe', () => {
     assert.equal(ids[0], 'chk-reopen-2');
 
     assert.equal((await send(patient, 'chk-reopen-3')).status, 409, 'reabrir libera so mais um envio');
+  });
+});
+
+describe('Pressao arterial e pulso no check-in', () => {
+  const body = (id, extra = {}) => ({
+    id, patientId: 'pat-1',
+    checkIn: { dayLabel: 'D+9', painLevel: 1, temperature: 36.5, mobilityScore: 'caminha_bem', symptoms: [], notes: '', mood: 'bem', ...extra }
+  });
+  const send = (token, id, extra) => call('/api/checkins', { method: 'POST', token, body: body(id, extra) });
+
+  it('guarda a pressao e o pulso no check-in e no paciente', async () => {
+    const token = (await login('mariana')).token;
+    const result = await send(token, 'chk-bp-ok', { systolic: 118, diastolic: 76, pulse: 72 });
+    assert.equal(result.status, 201);
+    const patient = result.body.patient;
+    assert.equal(patient.bloodPressure, '118/76 mmHg');
+    assert.equal(patient.heartRate, 72);
+    assert.deepEqual([patient.checkIns[0].systolic, patient.checkIns[0].diastolic, patient.checkIns[0].pulse], [118, 76, 72]);
+    assert.equal(patient.status, 'estavel');
+  });
+
+  it('140/90 ou mais fica em atencao; 180/120 ou mais e abaixo de 90/60, critico', async () => {
+    const token = (await login('mariana')).token;
+    assert.equal((await send(token, 'chk-bp-140', { systolic: 140, diastolic: 85 })).body.patient.status, 'atencao');
+    assert.equal((await send(token, 'chk-bp-diast', { systolic: 130, diastolic: 90 })).body.patient.status, 'atencao');
+    assert.equal((await send(token, 'chk-bp-180', { systolic: 185, diastolic: 100 })).body.patient.status, 'critico');
+    assert.equal((await send(token, 'chk-bp-low', { systolic: 85, diastolic: 55 })).body.patient.status, 'critico');
+    assert.equal((await send(token, 'chk-bp-low2', { systolic: 100, diastolic: 58 })).body.patient.status, 'critico');
+  });
+
+  it('sem pressao nem pulso o check-in vale e os ultimos valores continuam', async () => {
+    const token = (await login('mariana')).token;
+    await send(token, 'chk-bp-first', { systolic: 121, diastolic: 79, pulse: 80 });
+    const result = await send(token, 'chk-bp-none');
+    assert.equal(result.status, 201);
+    assert.equal(result.body.patient.checkIns[0].systolic, null);
+    assert.equal(result.body.patient.bloodPressure, '121/79 mmHg');
+    assert.equal(result.body.patient.heartRate, 80);
+  });
+
+  it('pressao so com uma das duas, invertida, fora da faixa ou pulso invalido: 400', async () => {
+    const token = (await login('mariana')).token;
+    const bad = [
+      { systolic: 120 }, { diastolic: 80 }, { systolic: 80, diastolic: 120 }, { systolic: 120, diastolic: 120 },
+      { systolic: 301, diastolic: 80 }, { systolic: 120, diastolic: 29 }, { systolic: 120.5, diastolic: 80 },
+      { systolic: 'abc', diastolic: 80 }, { pulse: 19 }, { pulse: 251 }, { pulse: 70.5 }
+    ];
+    for (const [index, extra] of bad.entries()) {
+      assert.equal((await send(token, `chk-bp-bad-${index}`, extra)).status, 400, JSON.stringify(extra));
+    }
   });
 });

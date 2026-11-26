@@ -3,6 +3,7 @@ import { Tab, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
 import { FormsModule } from '@angular/forms';
 import { DailyCheckIn } from '../types';
 import { VivaceService } from './vivace.service';
+import { pressureBand } from './pressure';
 import { spo2Band } from './spo2';
 
 type PatientTab = 'summary' | 'checkin' | 'medications' | 'care' | 'messages';
@@ -98,6 +99,10 @@ export class PatientPortalComponent {
   painLevel = this.patient()?.currentPain ?? 3;
   temperature = this.patient()?.currentTemp ?? 36.7;
   spo2: number | null = null;
+  systolic: number | null = null;
+  diastolic: number | null = null;
+  pulse: number | null = null;
+  readonly pressureBand = pressureBand;
   readonly spo2Band = spo2Band;
   mobilityScore: DailyCheckIn['mobilityScore'] = 'caminha_pouco';
   mood: DailyCheckIn['mood'] = 'bem';
@@ -162,6 +167,19 @@ export class PatientPortalComponent {
     return this.spo2 !== null && this.spo2 !== undefined && (!Number.isInteger(this.spo2) || this.spo2 < 50 || this.spo2 > 100);
   }
 
+  // Pressão: as duas juntas (ou nenhuma), inteiras, máxima maior que a mínima.
+  pressureInvalid(): boolean {
+    const [high, low] = [this.systolic, this.diastolic];
+    const empty = (value: number | null | undefined) => value === null || value === undefined;
+    if (empty(high) && empty(low)) return false;
+    if (empty(high) || empty(low)) return true;
+    return !Number.isInteger(high) || !Number.isInteger(low) || high! < 50 || high! > 300 || low! < 30 || low! > 200 || high! <= low!;
+  }
+
+  pulseInvalid(): boolean {
+    return this.pulse !== null && this.pulse !== undefined && (!Number.isInteger(this.pulse) || this.pulse < 20 || this.pulse > 250);
+  }
+
   toggleSymptom(symptom: string): void {
     this.symptoms.update(items => items.includes(symptom) ? items.filter(item => item !== symptom) : [...items, symptom]);
   }
@@ -205,7 +223,7 @@ export class PatientPortalComponent {
 
   async submitCheckIn(): Promise<void> {
     const patient = this.patient();
-    if (!patient || this.savingCheckIn() || !this.checkInOpen() || this.spo2Invalid()) return;
+    if (!patient || this.savingCheckIn() || !this.checkInOpen() || this.spo2Invalid() || this.pressureInvalid() || this.pulseInvalid()) return;
     this.savingCheckIn.set(true);
     this.photoError.set('');
     const photo = this.photoUrl()
@@ -217,6 +235,9 @@ export class PatientPortalComponent {
       painLevel: this.painLevel,
       temperature: this.temperature,
       spo2: this.spo2 ?? null,
+      systolic: this.systolic ?? null,
+      diastolic: this.diastolic ?? null,
+      pulse: this.pulse ?? null,
       mobilityScore: this.mobilityScore,
       symptoms: this.symptoms(),
       notes: this.notes,

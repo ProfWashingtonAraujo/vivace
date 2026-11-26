@@ -488,9 +488,19 @@ const handleRequest = async (request, response) => {
       const temperature = Number(payload?.temperature);
       // Saturação é opcional (nem todo paciente tem oxímetro): vazia vira null; informada, é inteira de 50 a 100.
       const spo2 = payload?.spo2 === undefined || payload.spo2 === null || payload.spo2 === '' ? null : Number(payload.spo2);
+      // Pressão e pulso também são opcionais. Sistólica e diastólica vêm juntas (sistólica maior), inteiras.
+      const optionalInt = value => (value === undefined || value === null || value === '' ? null : Number(value));
+      const systolic = optionalInt(payload?.systolic);
+      const diastolic = optionalInt(payload?.diastolic);
+      const pulse = optionalInt(payload?.pulse);
+      const intIn = (value, min, max) => Number.isInteger(value) && value >= min && value <= max;
+      const pressureOk = systolic === null && diastolic === null
+        || (intIn(systolic, 50, 300) && intIn(diastolic, 30, 200) && systolic > diastolic);
+      const pulseOk = pulse === null || intIn(pulse, 20, 250);
       if (!patientId || !payload || !Number.isFinite(painLevel) || painLevel < 0 || painLevel > 10
         || !Number.isFinite(temperature) || temperature < 25 || temperature > 45
-        || (spo2 !== null && (!Number.isInteger(spo2) || spo2 < 50 || spo2 > 100))) {
+        || (spo2 !== null && (!Number.isInteger(spo2) || spo2 < 50 || spo2 > 100))
+        || !pressureOk || !pulseOk) {
         json(request, response, 400, { error: 'Invalid check-in' });
         return;
       }
@@ -507,6 +517,9 @@ const handleRequest = async (request, response) => {
         painLevel,
         temperature,
         spo2,
+        systolic,
+        diastolic,
+        pulse,
         mobilityScore: shortText(payload.mobilityScore, 'repouso_absoluto'),
         symptoms: Array.isArray(payload.symptoms)
           ? payload.symptoms.filter(item => typeof item === 'string' && item.length <= maxShortField).slice(0, 12)
