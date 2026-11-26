@@ -224,6 +224,27 @@ export class VivaceService {
     return this.save('DELETE', `/api/professionals/${encodeURIComponent(id)}`, { version: this.versionOf(this.professionals(), id, version) });
   }
 
+  addAdmin(admin: Pick<AdminUser, 'name' | 'email' | 'password'>): Promise<boolean> {
+    return this.save('POST', '/api/admins', { body: { ...admin, clientId: this.newClientId('adm') } });
+  }
+
+  async deleteAdmin(id: string, version?: number): Promise<boolean> {
+    if (this.admins().length <= 1) {
+      this.notify('Mantenha ao menos um administrador cadastrado.', true);
+      return false;
+    }
+    return this.save('DELETE', `/api/admins/${encodeURIComponent(id)}`, { version: this.versionOf(this.admins(), id, version) });
+  }
+
+  async updateAdmin(id: string, changes: Pick<AdminUser, 'name' | 'email' | 'password'>, version?: number): Promise<boolean> {
+    const { password, ...fields } = changes;
+    const saved = await this.save('PATCH', `/api/admins/${encodeURIComponent(id)}`, {
+      body: fields, version: this.versionOf(this.admins(), id, version)
+    });
+    if (!saved || !password) return saved;
+    return this.save('PUT', `/api/admins/${encodeURIComponent(id)}/password`, { body: { password } });
+  }
+
   addPatient(patient: Pick<Patient, 'name' | 'age' | 'gender' | 'email' | 'password' | 'phone' | 'cpf' | 'procedure' | 'surgeryDate' | 'dischargeDate' | 'hospital'>, avatar?: string): Promise<boolean> {
     return this.save('POST', '/api/patients', {
       body: { ...patient, avatar: avatar || this.avatarFor(patient.name), clientId: this.newClientId('pat') }

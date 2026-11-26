@@ -1,7 +1,14 @@
 import { ChangeDetectionStrategy, Component, inject, computed, signal } from '@angular/core';
 import { form, FormField, required, submit } from '@angular/forms/signals';
-import { ProfessionalUser } from '../types';
+import { AdminUser, ProfessionalUser } from '../types';
 import { VivaceService } from './vivace.service';
+
+interface AdminFormModel {
+  name: string;
+  email: string;
+  password: string;
+  passwordConfirmation: string;
+}
 
 interface ProfessionalFormModel {
   name: string;
@@ -39,6 +46,11 @@ export class AdminDashboardComponent {
   readonly processingAvatar = signal(false);
   readonly avatarError = signal('');
   readonly professionalModel = signal<ProfessionalFormModel>(this.emptyProfessional());
+  readonly adminFormOpen = signal(false);
+  readonly editingAdminId =signal<string | null>(null);
+  private editingAdminVersion?: number;
+  readonly adminModel = signal<AdminFormModel>(this.emptyAdmin());
+  readonly adminForm = form(this.adminModel);
   readonly professionalForm = form(this.professionalModel, path => {
     required(path.name);
     required(path.email);
@@ -128,22 +140,75 @@ export class AdminDashboardComponent {
     this.showFeedback('Profissional excluído com sucesso.');
   }
 
+  startNewAdmin(): void {
+    this.cancelAdminEdit();
+    this.adminFormOpen.set(true);
+  }
+
+  async deleteAdmin(admin: AdminUser): Promise<void> {
+    if (!window.confirm(`Excluir o administrador ${admin.name}?`)) return;
+    if (!await this.vivace.deleteAdmin(admin.id, admin.version)) return;
+    if (this.editingAdminId() === admin.id) this.cancelAdminEdit();
+    this.showFeedback('Administrador excluído com sucesso.');
+  }
+
+  editAdmin(admin: AdminUser): void {
+    this.adminFormOpen.set(true);
+    this.editingAdminId.set(admin.id);
+    this.editingAdminVersion = admin.version;
+    this.adminModel.set({ name: admin.name, email: admin.email, password: '', passwordConfirmation: '' });
+  }
+
+  cancelAdminEdit(): void {
+    this.adminFormOpen.set(false);
+    this.editingAdminId.set(null);
+    this.adminModel.set(this.emptyAdmin());
+  }
+
+  saveAdmin(event: Event): void {
+    event.preventDefault();
+    const id = this.editingAdminId();
+    const { name, email, password, passwordConfirmation } = this.adminModel();
+    if (!name.trim() || !email.trim()) {
+      this.showFeedback('Informe o nome e o e-mail do administrador.', true);
+      return;
+    }
+    if (!this.passwordIsValid(password, passwordConfirmation, !id)) return;
+    void submit(this.adminForm, async () => {
+      const values = { name: name.trim(), email: email.trim(), password };
+      const saved = id
+        ? await this.vivace.updateAdmin(id, values, this.editingAdminVersion)
+        : await this.vivace.addAdmin(values);
+      if (!saved) return; // o aviso do motivo vem do serviço; o formulário fica aberto
+      this.cancelAdminEdit();
+      this.showFeedback(id ? 'Administrador atualizado com sucesso.' : 'Administrador cadastrado com sucesso.');
+    });
+  }
+
   private validatePassword(): boolean {
     const model = this.professionalModel();
-    if (!this.editingProfessionalId() && !model.password) {
+    return this.passwordIsValid(model.password, model.passwordConfirmation, !this.editingProfessionalId());
+  }
+
+  private passwordIsValid(password: string, confirmation: string, mandatory: boolean): boolean {
+    if (mandatory && !password) {
       this.showFeedback('Informe uma senha para o novo cadastro.', true);
       return false;
     }
-    if (!model.password && !model.passwordConfirmation) return true;
-    if (model.password.length < 8) {
+    if (!password && !confirmation) return true;
+    if (password.length < 8) {
       this.showFeedback('A senha deve ter pelo menos 8 caracteres.', true);
       return false;
     }
-    if (model.password !== model.passwordConfirmation) {
+    if (password !== confirmation) {
       this.showFeedback('A senha e a confirmação não coincidem.', true);
       return false;
     }
     return true;
+  }
+
+  private emptyAdmin(): AdminFormModel {
+    return { name: '', email: '', password: '', passwordConfirmation: '' };
   }
 
   private showFeedback(message: string, error = false): void {
