@@ -196,7 +196,11 @@ Não existe mais rota que grave o estado inteiro: `PUT /api/state` responde `405
 
 ### Check-in diário
 
-Cada paciente faz **um check-in por dia**, contado no fuso de São Paulo, e não pode refazê-lo. O servidor recusa o segundo com `409` ("O check-in de hoje já foi feito e não pode ser refeito. Volte amanhã.") e serializa envios simultâneos do mesmo paciente com um lock por paciente. Repetir o mesmo envio (mesmo `id`) continua valendo e não duplica. No portal, depois do check-in a aba mostra que o de hoje já foi feito, em vez do formulário, e há um calendário mensal com os dias já feitos marcados. A regra vale para qualquer papel que envie check-in; check-ins antigos são reconhecidos pela data gravada.
+Cada paciente faz **um check-in por dia**, contado no fuso de São Paulo, e só o refaz se a equipe reabrir o de hoje. O servidor recusa o segundo com `409` ("O check-in de hoje já foi feito. Se precisar refazer, peça à equipe para reabri-lo.") e serializa envios simultâneos do mesmo paciente com um lock por paciente. Repetir o mesmo envio (mesmo `id`) continua valendo e não duplica. No portal, depois do check-in a aba mostra que o de hoje já foi feito, em vez do formulário, e há um calendário mensal com os dias já feitos marcados. A regra vale para qualquer papel que envie check-in; check-ins antigos são reconhecidos pela data gravada.
+
+**Reabrir o check-in.** A equipe usa `POST /api/patients/:id/check-in/reopen` (botão na aba Check-ins do prontuário; `403` para paciente). Nada é apagado: a migração `023` guarda o instante da reabertura (`patients.check_in_reopened_at`) e a hora de cada envio (`check_ins.created_at`); o paciente pode enviar mais um hoje se o último de hoje foi criado antes da reabertura, e a linha do tempo registra quem reabriu.
+
+**Saturação (SpO2).** Campo opcional do check-in (inteiro de 50 a 100; fora disso `400`), guardado em `check_ins.spo2` e no último valor em `patients.current_spo2`. Abaixo de 90% o paciente fica `critico`, de 90 a 94% `atencao`. A equipe vê a saturação, com a faixa (normal, hipóxia leve, moderada, grave), no lugar da antiga "Adesão".
 
 ### Dose tomada
 

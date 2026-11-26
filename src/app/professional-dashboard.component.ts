@@ -2,6 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, inject, signal, output } 
 import { FormsModule } from '@angular/forms';
 import { AlertSeverity, Patient } from '../types';
 import { VivaceService } from './vivace.service';
+import { spo2Band } from './spo2';
 import { PatientManagementComponent } from './patient-management.component';
 
 type StatusFilter = 'todos' | AlertSeverity | 'pendente_foto';
@@ -16,6 +17,7 @@ type DayFilter = 'todos' | 'd0_d3' | 'd4_d7' | 'd8_plus';
 })
 export class ProfessionalDashboardComponent {
   readonly vivace = inject(VivaceService);
+  readonly spo2Band = spo2Band;
   readonly openPatient = output<string>();
   readonly searchQuery = signal('');
   readonly statusFilter = signal<StatusFilter>('todos');

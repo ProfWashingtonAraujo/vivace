@@ -43,6 +43,7 @@ export interface DailyCheckIn {
   dayLabel: string;
   painLevel: number; // 0-10
   temperature: number; // °C
+  spo2?: number | null; // % (opcional: nem todo paciente tem oxímetro)
   mobilityScore: 'repouso_absoluto' | 'caminha_pouco' | 'caminha_bem' | 'plena';
   symptoms: string[];
   notes?: string;
@@ -94,6 +95,8 @@ export interface Patient {
   lastCheckInTime: string;
   currentPain: number;
   currentTemp: number;
+  currentSpo2?: number | null;
+  checkInReopened?: boolean;
   bloodPressure: string;
   heartRate: number;
   woundReviewPending: boolean;

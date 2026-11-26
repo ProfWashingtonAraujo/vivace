@@ -5,6 +5,7 @@ import type { Options } from 'highcharts';
 import { HighchartsChartDirective } from 'highcharts-angular';
 import { AlertSeverity, DailyCheckIn, MedicationItem, PostOpInstruction, TimelineEvent, WoundPhoto } from '../types';
 import { VivaceService } from './vivace.service';
+import { spo2Band } from './spo2';
 
 type RecordTab = 'wounds' | 'timeline' | 'vitals' | 'meds' | 'care' | 'chat' | 'notes';
 
@@ -34,6 +35,8 @@ export class PatientRecordComponent {
   readonly patientId = input.required<string>();
   readonly back = output<void>();
   readonly vivace = inject(VivaceService);
+  readonly spo2Band = spo2Band;
+  readonly reopeningCheckIn = signal(false);
   readonly chatScroll = viewChild<ElementRef<HTMLElement>>('chatScroll');
   readonly chatSuggestions = ['Mantenha repouso e beba bastante água.', 'Envie uma foto do curativo pelo portal.', 'Vamos agendar o seu retorno. Qual o melhor horário?'];
 
@@ -299,6 +302,22 @@ export class PatientRecordComponent {
     this.editingReview.set(false);
     this.savedMessage.set('Parecer registrado e disponibilizado ao paciente.');
     window.setTimeout(() => this.savedMessage.set(''), 3000);
+  }
+
+  // O paciente já enviou o check-in de hoje (data do servidor, fuso de São Paulo).
+  hasCheckInToday(): boolean {
+    const today = new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' }).format(new Date());
+    return this.patient().checkIns.some(checkIn => checkIn.date === today);
+  }
+
+  async reopenCheckIn(): Promise<void> {
+    if (this.reopeningCheckIn()) return;
+    this.reopeningCheckIn.set(true);
+    try {
+      await this.vivace.reopenCheckIn(this.patient().id);
+    } finally {
+      this.reopeningCheckIn.set(false);
+    }
   }
 
   updateStatus(status: AlertSeverity): void {
