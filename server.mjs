@@ -156,8 +156,10 @@ const json = (request, response, status, value, extraHeaders = {}) => {
     ...extraHeaders
   };
   if (origin) {
-    headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization';
-    headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, DELETE, OPTIONS';
+    // PATCH e If-Match precisam estar na lista: de outra origem (o front no Vercel, a API no
+    // Render) o navegador faz um preflight e bloqueia a chamada que o servidor nao declara.
+    headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, If-Match';
+    headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, PATCH, DELETE, OPTIONS';
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Expose-Headers'] = 'Retry-After';
   }
