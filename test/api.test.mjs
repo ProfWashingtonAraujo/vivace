@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 import { createHash } from 'node:crypto';
-import { createPool } from '../db/session.mjs';
+import { createPool, withSession } from '../db/session.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const base = 'http://127.0.0.1:3194';
@@ -18,7 +18,16 @@ const json = { 'Content-Type': 'application/json', Origin: 'http://localhost:300
 // da API.
 const pool = createPool();
 
-const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1', at = base, headers: extraHeaders = {} } = {}) => {
+const todayLabel = () => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date());
+const adminSession = { role: 'admin', userId: 'adm-1' };
+
+// Cada paciente so faz um check-in por dia. Os testes que enviam check-ins por outro motivo
+// partem de um dia limpo (os check-ins de hoje passam para uma data antiga, sem sair da lista);
+// os que testam a regra passam keepToday.
+const clearToday = () => withSession(pool, adminSession, client => client.query("UPDATE check_ins SET date = '01/01/2000' WHERE date = $1", [todayLabel()]));
+
+const call = async (path, { method = 'GET', token, body, ip = '10.0.0.1', at = base, headers: extraHeaders = {}, keepToday = false } = {}) => {
+  if (path === '/api/checkins' && method === 'POST' && !keepToday) await clearToday();
   const headers = { ...json, 'X-Forwarded-For': ip, ...extraHeaders };
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${at}${path}`, {
@@ -1775,5 +1784,47 @@ describe('Fase 2 / area 5: status do paciente', () => {
     });
     assert.equal(sent.status, 201, JSON.stringify(sent.body));
     assert.equal(patientOf(await staffState(staff), 'pat-1').status, 'critico');
+  });
+});
+
+describe('Check-in diario: um por dia, sem refazer', () => {
+  const body = id => ({ id, checkIn: { painLevel: 2, temperature: 36.6, symptoms: [], notes: '', mood: 'bem' } });
+  const send = (token, id) => call('/api/checkins', { method: 'POST', token, keepToday: true, body: body(id) });
+  const countToday = async () => (await withSession(pool, adminSession, client => client.query(
+    "SELECT count(*)::int AS total FROM check_ins WHERE patient_id = 'pat-1' AND date = $1", [todayLabel()]))).rows[0].total;
+
+  it('o segundo check-in do mesmo dia responde 409 e nao grava', async () => {
+    await clearToday();
+    const token = (await login('mariana')).token;
+    assert.equal((await send(token, 'chk-dia-1')).status, 201);
+    const second = await send(token, 'chk-dia-2');
+    assert.equal(second.status, 409, JSON.stringify(second.body));
+    assert.match(second.body.error, /check-in de hoje/);
+    assert.equal(await countToday(), 1);
+  });
+
+  it('repetir o mesmo envio (mesmo id) continua valendo e nao duplica', async () => {
+    await clearToday();
+    const token = (await login('mariana')).token;
+    assert.equal((await send(token, 'chk-dia-3')).status, 201);
+    assert.equal((await send(token, 'chk-dia-3')).status, 201);
+    assert.equal(await countToday(), 1);
+  });
+
+  it('envios simultaneos gravam um so', async () => {
+    await clearToday();
+    const token = (await login('mariana')).token;
+    const results = await Promise.all(['chk-par-a', 'chk-par-b', 'chk-par-c'].map(id => send(token, id)));
+    assert.deepEqual(results.map(result => result.status).sort(), [201, 409, 409]);
+    assert.equal(await countToday(), 1);
+  });
+
+  it('no dia seguinte o paciente volta a poder fazer', async () => {
+    await clearToday();
+    const token = (await login('mariana')).token;
+    assert.equal((await send(token, 'chk-dia-4')).status, 201);
+    await withSession(pool, adminSession, client => client.query("UPDATE check_ins SET date = '01/01/2020' WHERE patient_id = 'pat-1' AND id = 'chk-dia-4'"));
+    assert.equal((await send(token, 'chk-dia-5')).status, 201);
+    await withSession(pool, adminSession, client => client.query("DELETE FROM check_ins WHERE patient_id = 'pat-1' AND date = '01/01/2020'"));
   });
 });

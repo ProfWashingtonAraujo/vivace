@@ -222,12 +222,18 @@ export const insertCheckIn = (session, { patientId, checkIn, photo }) =>
   withSession(pool, session, async client => {
     const patient = await readPatient(client, patientId);
     if (!patient) throw notFound();
+    // Dois envios ao mesmo tempo do mesmo paciente passam um de cada vez, senão os dois
+    // veriam "ainda não fez hoje" e gravariam.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`check-in:${patientId}`]);
     const already = await client.query('SELECT 1 FROM check_ins WHERE patient_id = $1 AND id = $2', [patientId, checkIn.id]);
     if (already.rows.length) return patient;
 
     const now = new Date();
     const time = patientTimestamp(now);
     const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(now);
+    // Um check-in por dia (no fuso de São Paulo) e sem refazer: o de hoje já existe, com outro id.
+    const today = await client.query('SELECT 1 FROM check_ins WHERE patient_id = $1 AND date = $2', [patientId, date]);
+    if (today.rows.length) throw conflict('Daily check-in already done', 'O check-in de hoje já foi feito e não pode ser refeito. Volte amanhã.');
     const dayLabel = checkIn.dayLabel || `D+${patient.postOpDay}`;
 
     // A UI le checkIns[0] como "hoje", entao o novo entra no inicio da lista.
