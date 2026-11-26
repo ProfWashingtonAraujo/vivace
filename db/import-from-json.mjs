@@ -95,10 +95,10 @@ const insertCollections = async (client, state, warnings) => {
 
   for (const [index, admin] of (state.admins ?? []).entries()) {
     await client.query(
-      `INSERT INTO admins (id, name, email, position, is_super) VALUES ($1,$2,$3,$4,$5)
+      `INSERT INTO admins (id, name, email, position, is_super, avatar) VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name, email = EXCLUDED.email, position = EXCLUDED.position, is_super = EXCLUDED.is_super`,
-      [admin.id, admin.name, admin.email, index, admin.isSuper ?? index === 0]
+         name = EXCLUDED.name, email = EXCLUDED.email, position = EXCLUDED.position, is_super = EXCLUDED.is_super, avatar = EXCLUDED.avatar`,
+      [admin.id, admin.name, admin.email, index, admin.isSuper ?? index === 0, admin.avatar ?? '']
     );
     await storeCredentials(client, admin.id, 'admin', admin.password);
   }

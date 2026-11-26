@@ -49,7 +49,10 @@ describe('validateAdmin', () => {
   it('aceita nome, e-mail, senha e isSuper; so devolve esses campos, e isSuper comeca falso', () => {
     const result = validateAdmin({ ...admin, id: 'x', version: 9, role: 'x' });
     assert.equal(result.ok, true);
-    assert.deepEqual(Object.keys(result.values).sort(), ['email', 'isSuper', 'name']);
+    assert.deepEqual(Object.keys(result.values).sort(), ['avatar', 'email', 'isSuper', 'name']);
+    assert.equal(result.values.avatar, '');
+    assert.equal(validateAdmin({ ...admin, avatar: 'http://inseguro/x.png' }).ok, false);
+    assert.equal(validateAdmin({ ...admin, avatar: 'https://exemplo.com/x.png' }).values.avatar, 'https://exemplo.com/x.png');
     assert.equal(result.values.isSuper, false);
     assert.equal(validateAdmin({ ...admin, isSuper: true }).values.isSuper, true);
     assert.equal(validateAdmin({ ...admin, isSuper: 'sim' }).ok, false);

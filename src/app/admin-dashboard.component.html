@@ -83,6 +83,11 @@
       <form (submit)="saveAdmin($event)" class="p-4 sm:p-5 space-y-4 border-b border-[#D9E2EC]" novalidate>
         <h3 class="text-sm font-bold text-[#0B2A4A]">{{ editingAdminId() ? 'Editar administrador' : 'Novo administrador' }}</h3>
         <div class="grid sm:grid-cols-2 gap-4">
+          <div class="sm:col-span-2 flex items-center gap-4">
+            @if (adminAvatar()) {<img [src]="adminAvatar()" alt="Prévia da foto do administrador" class="w-16 h-16 rounded-2xl object-cover border border-[#D9E2EC]" />} @else {<div class="w-16 h-16 rounded-2xl bg-[#E6F0FA] text-[#0B5CAB] grid place-items-center text-xl font-bold">{{ adminModel().name.charAt(0).toUpperCase() || 'A' }}</div>}
+            <div><strong class="block text-sm">Foto do administrador</strong><p class="mt-1 text-xs text-[#52627A]">JPEG, PNG ou WebP, com até 5 MB.</p><div class="flex flex-wrap gap-2 mt-2"><input #adminPhotoInput type="file" accept="image/jpeg,image/png,image/webp" (change)="selectAdminAvatar($event)" class="sr-only" /><button type="button" (click)="adminPhotoInput.click()" [disabled]="processingAvatar()" class="px-4 py-2 bg-[#0B5CAB] text-white rounded-xl text-xs font-bold disabled:opacity-60">{{ processingAvatar() ? 'Processando...' : adminAvatar() ? 'Trocar foto' : 'Escolher foto' }}</button>@if (adminAvatar()) {<button type="button" (click)="adminAvatar.set('')" class="px-4 py-2 bg-[#FFF1F2] text-[#BE123C] rounded-xl text-xs font-bold">Remover</button>}</div></div>
+          </div>
+          @if (adminAvatarError()) {<p role="alert" class="sm:col-span-2 -mt-2 text-xs font-bold text-[#BE123C]">{{ adminAvatarError() }}</p>}
           <label class="text-xs font-bold">Nome<input [formField]="adminForm.name" class="form-input" /></label>
           <label class="text-xs font-bold">E-mail<input type="email" [formField]="adminForm.email" class="form-input" /></label>
           <label class="text-xs font-bold">Nova senha<input type="password" autocomplete="new-password" [formField]="adminForm.password" class="form-input" placeholder="Mínimo de 8 caracteres" /></label>
@@ -99,6 +104,7 @@
     <ul class="divide-y divide-[#D9E2EC]">
       @for (admin of vivace.admins(); track admin.id) {
         <li class="flex items-center gap-x-4 p-4 sm:px-5">
+          @if (admin.avatar) {<img [src]="admin.avatar" [alt]="admin.name" class="w-12 h-12 rounded-xl object-cover shrink-0 bg-[#E6F0FA]" />} @else {<div aria-hidden="true" class="w-12 h-12 rounded-xl shrink-0 bg-[#E6F0FA] text-[#0B5CAB] grid place-items-center text-lg font-bold">{{ admin.name.charAt(0).toUpperCase() }}</div>}
           <div class="min-w-0 flex-1">
             <strong class="block">{{ admin.name }}@if (admin.isSuper) { <span class="ml-2 px-2 py-0.5 align-middle rounded-full bg-[#E6F0FA] text-[#0B5CAB] text-xs font-bold">Super admin</span>}</strong>
             <span class="block truncate text-sm text-[#52627A]">{{ admin.email }}</span>

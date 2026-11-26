@@ -776,7 +776,7 @@ const people = {
   },
   admin: {
     table: 'admins', role: 'admin', label: 'Administrator', of: adminOf, prefix: 'adm',
-    columns: { name: 'name', email: 'email', isSuper: 'is_super' }
+    columns: { name: 'name', email: 'email', isSuper: 'is_super', avatar: 'avatar' }
   }
 };
 
@@ -815,8 +815,8 @@ const createPerson = (kind, session, { values, password, clientId }) =>
         );
       } else {
         await client.query(
-          'INSERT INTO admins (id, name, email, position, is_super) VALUES ($1, $2, $3, (SELECT coalesce(max(position) + 1, 0) FROM admins), $4)',
-          [id, values.name, values.email, values.isSuper === true]
+          'INSERT INTO admins (id, name, email, position, is_super, avatar) VALUES ($1, $2, $3, (SELECT coalesce(max(position) + 1, 0) FROM admins), $4, $5)',
+          [id, values.name, values.email, values.isSuper === true, values.avatar ?? '']
         );
       }
       await storePassword(client, id, config.role, password);
@@ -844,7 +844,7 @@ const updatePerson = (kind, session, { id, values, version }) =>
     const params = [id, version];
     for (const [field, column] of Object.entries(config.columns)) {
       if (!(field in values)) continue;
-      params.push(field === 'avatar' && values.avatar === '' ? defaultAvatar(values.name ?? before.name) : values[field]);
+      params.push(kind === 'professional' && field === 'avatar' && values.avatar === '' ? defaultAvatar(values.name ?? before.name) : values[field]);
       assignments.push(`${column} = $${params.length}`);
     }
     try {

@@ -59,6 +59,9 @@ export class VivaceService {
   readonly sessionUserId = signal(this.storedSession?.userId ?? '');
   // Só o super administrador cria e apaga administradores; o servidor confere de novo.
   readonly currentAdmin = computed(() => this.admins().find(admin => admin.id === this.sessionUserId()));
+  // Quem está logado como profissional (o primeiro da lista só como reserva, para sessão antiga).
+  readonly currentProfessional = computed(() =>
+    this.professionals().find(professional => professional.id === this.sessionUserId()) ?? this.professionalUser());
   readonly isSuperAdmin = computed(() => this.currentAdmin()?.isSuper === true);
   readonly professionalUser = computed(() => this.professionals()[0] ?? CURRENT_PROFESSIONAL);
   readonly selectedPatient = computed(() =>
@@ -231,7 +234,7 @@ export class VivaceService {
     return this.save('DELETE', `/api/professionals/${encodeURIComponent(id)}`, { version: this.versionOf(this.professionals(), id, version) });
   }
 
-  addAdmin(admin: Pick<AdminUser, 'name' | 'email' | 'password' | 'isSuper'>): Promise<boolean> {
+  addAdmin(admin: Pick<AdminUser, 'name' | 'email' | 'password' | 'isSuper' | 'avatar'>): Promise<boolean> {
     return this.save('POST', '/api/admins', { body: { ...admin, clientId: this.newClientId('adm') } });
   }
 
@@ -243,7 +246,7 @@ export class VivaceService {
     return this.save('DELETE', `/api/admins/${encodeURIComponent(id)}`, { version: this.versionOf(this.admins(), id, version) });
   }
 
-  async updateAdmin(id: string, changes: Pick<AdminUser, 'name' | 'email' | 'password' | 'isSuper'>, version?: number): Promise<boolean> {
+  async updateAdmin(id: string, changes: Pick<AdminUser, 'name' | 'email' | 'password' | 'isSuper' | 'avatar'>, version?: number): Promise<boolean> {
     const { password, ...fields } = changes;
     const saved = await this.save('PATCH', `/api/admins/${encodeURIComponent(id)}`, {
       body: fields, version: this.versionOf(this.admins(), id, version)

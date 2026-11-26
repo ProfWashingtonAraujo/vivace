@@ -1780,6 +1780,22 @@ describe('Super administrador', () => {
     assert.equal((await api('DELETE', `/api/admins/${common.id}`, root, undefined, promoted.body.admin.version)).status, 200);
   });
 
+  it('a foto do administrador: comeca vazia, o proprio admin troca e remove, e foto invalida 400', async () => {
+    const root = (await login('admin@vivace.med.br')).token;
+    const body = newAdmin();
+    const { admin: created } = (await api('POST', '/api/admins', root, body)).body;
+    assert.equal(created.avatar, '');
+    const token = (await loginAs(body.email, body.password, '10.9.5.2')).body.token;
+    const photo = 'https://exemplo.com/foto.png';
+    const set = await api('PATCH', `/api/admins/${created.id}`, token, { avatar: photo }, created.version);
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.equal(set.body.admin.avatar, photo);
+    assert.equal((await api('PATCH', `/api/admins/${created.id}`, token, { avatar: 'javascript:alert(1)' }, set.body.admin.version)).status, 400);
+    const cleared = await api('PATCH', `/api/admins/${created.id}`, token, { avatar: '' }, set.body.admin.version);
+    assert.equal(cleared.body.admin.avatar, '', 'sem foto o admin continua sem foto (nao ganha a padrao)');
+    assert.equal((await api('DELETE', `/api/admins/${created.id}`, root, undefined, cleared.body.admin.version)).status, 200);
+  });
+
   it('nunca fica sem super admin: nao apaga nem rebaixa o ultimo', async () => {
     const root = (await login('admin@vivace.med.br')).token;
     const { admins } = await staffState(root);

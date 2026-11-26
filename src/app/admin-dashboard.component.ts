@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, inject, computed, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, inject, computed, signal, WritableSignal } from '@angular/core';
 import { form, FormField, required, submit } from '@angular/forms/signals';
 import { AdminUser, ProfessionalUser } from '../types';
 import { VivaceService } from './vivace.service';
@@ -48,6 +48,8 @@ export class AdminDashboardComponent {
   readonly avatarError = signal('');
   readonly professionalModel = signal<ProfessionalFormModel>(this.emptyProfessional());
   readonly adminFormOpen = signal(false);
+  readonly adminAvatar = signal('');
+  readonly adminAvatarError = signal('');
   readonly editingAdminId =signal<string | null>(null);
   private editingAdminVersion?: number;
   readonly adminModel = signal<AdminFormModel>(this.emptyAdmin());
@@ -108,27 +110,35 @@ export class AdminDashboardComponent {
     this.avatarError.set('');
   }
 
-  async selectAvatar(event: Event): Promise<void> {
+  selectAvatar(event: Event): Promise<void> {
+    return this.pickAvatar(event, this.professionalAvatar, this.avatarError);
+  }
+
+  selectAdminAvatar(event: Event): Promise<void> {
+    return this.pickAvatar(event, this.adminAvatar, this.adminAvatarError);
+  }
+
+  private async pickAvatar(event: Event, target: WritableSignal<string>, error: WritableSignal<string>): Promise<void> {
     const input = event.target as HTMLInputElement;
     const file = input.files?.[0];
     input.value = '';
     if (!file) return;
 
-    this.avatarError.set('');
+    error.set('');
     if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
-      this.avatarError.set('Escolha uma imagem JPEG, PNG ou WebP.');
+      error.set('Escolha uma imagem JPEG, PNG ou WebP.');
       return;
     }
     if (file.size > 5 * 1024 * 1024) {
-      this.avatarError.set('A foto deve ter no máximo 5 MB.');
+      error.set('A foto deve ter no máximo 5 MB.');
       return;
     }
 
     this.processingAvatar.set(true);
     try {
-      this.professionalAvatar.set(await this.compressAvatar(file));
+      target.set(await this.compressAvatar(file));
     } catch {
-      this.avatarError.set('Não foi possível processar a foto. Tente outra imagem.');
+      error.set('Não foi possível processar a foto. Tente outra imagem.');
     } finally {
       this.processingAvatar.set(false);
     }
@@ -158,12 +168,16 @@ export class AdminDashboardComponent {
     this.editingAdminId.set(admin.id);
     this.editingAdminVersion = admin.version;
     this.adminModel.set({ name: admin.name, email: admin.email, isSuper: admin.isSuper === true, password: '', passwordConfirmation: '' });
+    this.adminAvatar.set(admin.avatar ?? '');
+    this.adminAvatarError.set('');
   }
 
   cancelAdminEdit(): void {
     this.adminFormOpen.set(false);
     this.editingAdminId.set(null);
     this.adminModel.set(this.emptyAdmin());
+    this.adminAvatar.set('');
+    this.adminAvatarError.set('');
   }
 
   saveAdmin(event: Event): void {
@@ -177,7 +191,7 @@ export class AdminDashboardComponent {
     if (!this.passwordIsValid(password, passwordConfirmation, !id)) return;
     void submit(this.adminForm, async () => {
       // Quem não é super não manda `isSuper`: o servidor recusa a tentativa de se promover.
-      const values = { name: name.trim(), email: email.trim(), password, ...(this.vivace.isSuperAdmin() ? { isSuper } : {}) };
+      const values = { name: name.trim(), email: email.trim(), password, avatar: this.adminAvatar(), ...(this.vivace.isSuperAdmin() ? { isSuper } : {}) };
       const saved = id
         ? await this.vivace.updateAdmin(id, values, this.editingAdminVersion)
         : await this.vivace.addAdmin(values);
