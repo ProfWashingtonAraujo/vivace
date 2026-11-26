@@ -11,7 +11,6 @@ import { shouldDeliver } from './lib/event-audience.mjs';
 import { resolveBootstrap } from './lib/bootstrap-config.mjs';
 import { parseJson, readBody, safeHandler } from './lib/http.mjs';
 import { parseImageUpload } from './lib/image-upload.mjs';
-import { removesLastAdmin } from './lib/state-guards.mjs';
 import { validateNote, validateReview } from './lib/staff-actions.mjs';
 import { parseIfMatch, validateInstruction, validateMedication } from './lib/catalog.mjs';
 import { validateCareTeam, validatePassword, validatePatient } from './lib/patient.mjs';
@@ -177,8 +176,7 @@ const bodyLimits = {
   message: 16 * 1024,
   patient: 1024 * 1024,
   medication: 4 * 1024,
-  checkIn: 8 * 1024 * 1024,
-  state: 25 * 1024 * 1024
+  checkIn: 8 * 1024 * 1024
 };
 const maxPhotoBytes = 6 * 1024 * 1024;
 const maxShortField = 100;
@@ -902,28 +900,6 @@ const handleRequest = async (request, response) => {
       // entrega a linha.
       const state = await store.readState(session);
       json(request, response, 200, state);
-      return;
-    }
-    if (request.method === 'PUT') {
-      if (session.role === 'patient') {
-        forbidden(request, response);
-        return;
-      }
-      const incoming = parseJson(await readBody(request, bodyLimits.state));
-      if (!Array.isArray(incoming.patients) || !Array.isArray(incoming.professionals)) {
-        json(request, response, 400, { error: 'Invalid state' });
-        return;
-      }
-      if (incoming.admins !== undefined && !Array.isArray(incoming.admins)) {
-        json(request, response, 400, { error: 'Invalid state' });
-        return;
-      }
-      if (removesLastAdmin(session, incoming)) {
-        json(request, response, 400, { error: 'É preciso manter pelo menos um administrador' });
-        return;
-      }
-      await store.putState(session, incoming);
-      json(request, response, 200, { saved: true });
       return;
     }
     json(request, response, 405, { error: 'Method not allowed' });
