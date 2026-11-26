@@ -1,7 +1,7 @@
 import { createHash, randomUUID, scrypt as scryptCallback } from 'node:crypto';
 import { adminOf, professionalOf, readAggregate, readMedications, readPatient } from './aggregate.mjs';
 import { asAdmin, createPool, withSession } from './session.mjs';
-import { brDateTime } from '../lib/br-time.mjs';
+import { brDateTime, brToday } from '../lib/br-time.mjs';
 import { reviewTimelineTitle } from '../lib/staff-actions.mjs';
 import { defaultAvatar, postOpDay } from '../lib/patient.mjs';
 
@@ -308,10 +308,14 @@ export const toggleMedicationTaken = (session, { patientId, medicationId, time }
     if (!patient) throw notFound();
     const medication = patient.medications.find(item => item.id === medicationId);
     if (!medication || !medication.times.includes(time)) return patient;
+    // Marca a dose de hoje, ou desfaz a de hoje. Uma marca de outro dia não conta como tomada:
+    // clicar nela marca a de hoje, em vez de "desmarcar" algo que não está em vigor.
+    const today = brToday();
     await client.query(
-      `INSERT INTO medication_doses (patient_id, medication_id, time, taken) VALUES ($1,$2,$3,true)
-       ON CONFLICT (patient_id, medication_id, time) DO UPDATE SET taken = NOT medication_doses.taken`,
-      [patientId, medicationId, time]
+      `INSERT INTO medication_doses (patient_id, medication_id, time, taken, taken_on) VALUES ($1,$2,$3,true,$4)
+       ON CONFLICT (patient_id, medication_id, time) DO UPDATE
+         SET taken = NOT (medication_doses.taken AND medication_doses.taken_on = $4), taken_on = $4`,
+      [patientId, medicationId, time, today]
     );
     const updated = medicationAdherence((await readPatient(client, patientId)).medications);
     await client.query('UPDATE patients SET medication_adherence_percent = $1 WHERE id = $2', [updated, patientId]);

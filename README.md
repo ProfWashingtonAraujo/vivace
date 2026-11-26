@@ -198,6 +198,10 @@ Não existe mais rota que grave o estado inteiro: `PUT /api/state` responde `405
 
 Cada paciente faz **um check-in por dia**, contado no fuso de São Paulo, e não pode refazê-lo. O servidor recusa o segundo com `409` ("O check-in de hoje já foi feito e não pode ser refeito. Volte amanhã.") e serializa envios simultâneos do mesmo paciente com um lock por paciente. Repetir o mesmo envio (mesmo `id`) continua valendo e não duplica. No portal, depois do check-in a aba mostra que o de hoje já foi feito, em vez do formulário, e há um calendário mensal com os dias já feitos marcados. A regra vale para qualquer papel que envie check-in; check-ins antigos são reconhecidos pela data gravada.
 
+### Dose tomada
+
+"Tomado" só aparece quando o **paciente** marca, e só vale no dia em que ele marcou (fuso de São Paulo). A equipe vê, mas `POST /api/medication-taken` responde `403` para profissional e admin. A migração `020` guarda o dia da marca (`medication_doses.taken_on`): marcas de outros dias, ou sem dia (as de demonstração do seed e as antigas), não contam como tomadas, então cada dia começa sem nada marcado. O seed de demonstração também deixou de trazer doses marcadas.
+
 ### Integração contínua
 
 `.github/workflows/ci.yml` roda em cada push com um Postgres 18 como serviço: gera um estado de teste com administrador (`scripts/make-test-state.mjs`, que exige um caminho de saída e nunca sobrescreve `.data/`), provisiona o banco pelo mesmo `npm run db:provision` do Render e executa `npm test`, o que inclui os testes de API e de RLS que precisam de banco. Um segundo job compila o front em modo de desenvolvimento e o build de produção da Vercel, que falha se a CSP não liberar a URL da API.

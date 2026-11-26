@@ -2,6 +2,7 @@
 // A ordem de cada colecao vem de `position`, que guarda o indice do array no
 // JSON, porque o frontend depende dela (checkIns[0] e "hoje", medications.slice(0,2)).
 
+import { brToday } from '../lib/br-time.mjs';
 import { displayedSurgeon } from '../lib/surgeon.mjs';
 
 const ordered = rows => [...rows].sort((a, b) => a.position - b.position);
@@ -25,11 +26,13 @@ const photoUrl = row => {
 };
 
 export const readMedications = (medications, times, doses) => medications.map(medication => {
+  const today = brToday();
   const medicationTimes = ordered(times.filter(time => time.medication_id === medication.id));
   const takenToday = {};
   for (const time of medicationTimes) {
     const dose = doses.find(item => item.medication_id === medication.id && item.time === time.time);
-    takenToday[time.time] = Boolean(dose?.taken);
+    // Só vale o que o paciente marcou hoje: a marca de outro dia (ou sem dia) não conta.
+    takenToday[time.time] = Boolean(dose?.taken && dose.taken_on === today);
   }
   return {
     id: medication.id,

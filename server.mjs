@@ -526,8 +526,13 @@ const handleRequest = async (request, response) => {
     const session = await authorize(request, response);
     if (!session) return;
     try {
+      // Só o paciente marca que tomou: a equipe vê, mas não confirma por ele.
+      if (session.role !== 'patient') {
+        forbidden(request, response);
+        return;
+      }
       const input = parseJson(await readBody(request, bodyLimits.medication));
-      const patientId = session.role === 'patient' ? session.userId : input.patientId;
+      const patientId = session.userId;
       if (!patientId || typeof input.medicationId !== 'string' || typeof input.time !== 'string') {
         json(request, response, 400, { error: 'Invalid medication confirmation' });
         return;

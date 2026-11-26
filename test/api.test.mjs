@@ -1828,3 +1828,44 @@ describe('Check-in diario: um por dia, sem refazer', () => {
     await withSession(pool, adminSession, client => client.query("DELETE FROM check_ins WHERE patient_id = 'pat-1' AND date = '01/01/2020'"));
   });
 });
+
+describe('Dose tomada: so o paciente marca, e so vale no dia', () => {
+  const firstSlot = async token => {
+    const medication = (await call('/api/state', { token })).body.patients[0].medications[0];
+    return { medicationId: medication.id, time: medication.times[0] };
+  };
+  const takenNow = async token => {
+    const { medicationId, time } = await firstSlot(token);
+    return (await call('/api/state', { token })).body.patients[0].medications.find(item => item.id === medicationId).takenToday[time];
+  };
+
+  it('a equipe nao marca dose por ele: 403', async () => {
+    const patientToken = (await login('mariana')).token;
+    const slot = await firstSlot(patientToken);
+    const staff = (await login('Rafaely Carvalho')).token;
+    assert.equal((await call('/api/medication-taken', { method: 'POST', token: staff, body: { patientId: 'pat-1', ...slot } })).status, 403);
+    const admin = (await login('admin@vivace.med.br')).token;
+    assert.equal((await call('/api/medication-taken', { method: 'POST', token: admin, body: { patientId: 'pat-1', ...slot } })).status, 403);
+  });
+
+  it('o paciente marca e desmarca a dose de hoje', async () => {
+    const token = (await login('mariana')).token;
+    const slot = await firstSlot(token);
+    const before = await takenNow(token);
+    assert.equal((await call('/api/medication-taken', { method: 'POST', token, body: slot })).status, 200);
+    assert.equal(await takenNow(token), !before);
+    assert.equal((await call('/api/medication-taken', { method: 'POST', token, body: slot })).status, 200);
+    assert.equal(await takenNow(token), before);
+  });
+
+  it('a marca de outro dia nao aparece como tomada, e clicar marca a de hoje', async () => {
+    const token = (await login('mariana')).token;
+    const slot = await firstSlot(token);
+    await withSession(pool, adminSession, client => client.query(
+      "UPDATE medication_doses SET taken = true, taken_on = '2020-01-01' WHERE patient_id = 'pat-1' AND medication_id = $1 AND time = $2",
+      [slot.medicationId, slot.time]));
+    assert.equal(await takenNow(token), false, 'a marca antiga apareceu como tomada hoje');
+    assert.equal((await call('/api/medication-taken', { method: 'POST', token, body: slot })).status, 200);
+    assert.equal(await takenNow(token), true);
+  });
+});
