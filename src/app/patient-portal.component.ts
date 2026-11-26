@@ -1,4 +1,4 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, DestroyRef, computed, inject, signal } from '@angular/core';
 import { Tab, TabList, TabPanel, Tabs } from '@angular/aria/tabs';
 import { FormsModule } from '@angular/forms';
 import { DailyCheckIn } from '../types';
@@ -60,6 +60,35 @@ export class PatientPortalComponent {
       })
     ];
   });
+  // Linha do dia: cada horário de cada remédio vira uma dose, em ordem de relógio (fuso de
+  // São Paulo, o mesmo do servidor). "Se dor" nunca fica atrasada: não tem hora obrigatória.
+  private readonly nowMinutes = signal(this.saoPauloMinutes());
+  private readonly pendingDoses = signal<ReadonlySet<string>>(new Set());
+  readonly doseSlots = computed(() => {
+    const now = this.nowMinutes();
+    const pending = this.pendingDoses();
+    const slots = (this.patient()?.medications ?? []).flatMap(med => med.times.map(time => {
+      const [hour, minute] = time.split(':').map(Number);
+      const key = `${med.id}|${time}`;
+      return {
+        key, med, time, minutes: hour * 60 + minute, taken: Boolean(med.takenToday[time]),
+        asNeeded: /se dor|se necess/i.test(med.frequency), saving: pending.has(key)
+      };
+    })).sort((a, b) => a.minutes - b.minutes || a.med.name.localeCompare(b.med.name));
+    const nextKey = slots.find(slot => !slot.taken && slot.minutes >= now - 60)?.key;
+    return slots.map(slot => ({
+      ...slot,
+      state: slot.taken ? 'taken' : slot.key === nextKey ? 'next' : !slot.asNeeded && slot.minutes < now - 60 ? 'late' : 'later'
+    }));
+  });
+  readonly dosesTaken = computed(() => this.doseSlots().filter(slot => slot.taken).length);
+  readonly nextDoseText = computed(() => {
+    const slots = this.doseSlots();
+    const next = slots.find(slot => slot.state === 'next');
+    if (next) return `Próxima: ${next.time} · ${next.med.name}`;
+    if (slots.every(slot => slot.taken)) return 'Todas as doses de hoje foram tomadas.';
+    return slots.some(slot => slot.state === 'late') ? 'Há doses com horário passado. Confirme as que você já tomou.' : 'Sem próxima dose hoje.';
+  });
   readonly weekDays = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
   readonly lastPhoto = computed(() => this.patient()?.woundPhotos.find(photo => !photo.imageUrl.includes('images.unsplash.com')));
 
@@ -76,6 +105,29 @@ export class PatientPortalComponent {
     'Náusea ou falta de apetite', 'Inchaço moderado', 'Tontura ao levantar',
     'Intestino preso', 'Sensação de cansaço'
   ];
+
+  constructor() {
+    const timer = setInterval(() => this.nowMinutes.set(this.saoPauloMinutes()), 60_000);
+    inject(DestroyRef).onDestroy(() => clearInterval(timer));
+  }
+
+  async toggleDose(medicationId: string, time: string): Promise<void> {
+    const patient = this.patient();
+    const key = `${medicationId}|${time}`;
+    if (!patient || this.pendingDoses().has(key)) return;
+    this.pendingDoses.update(keys => new Set(keys).add(key));
+    try {
+      await this.vivace.toggleMedicationTaken(patient.id, medicationId, time);
+    } finally {
+      this.pendingDoses.update(keys => { const next = new Set(keys); next.delete(key); return next; });
+    }
+  }
+
+  private saoPauloMinutes(): number {
+    const [hour, minute] = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .format(new Date()).split(':').map(Number);
+    return hour * 60 + minute;
+  }
 
   shiftMonth(amount: number): void {
     this.viewMonth.update(({ year, month }) => {
