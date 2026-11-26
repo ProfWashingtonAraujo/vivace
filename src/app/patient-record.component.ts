@@ -5,6 +5,7 @@ import type { Options } from 'highcharts';
 import { HighchartsChartDirective } from 'highcharts-angular';
 import { AlertSeverity, DailyCheckIn, MedicationItem, PostOpInstruction, TimelineEvent, WoundPhoto } from '../types';
 import { VivaceService } from './vivace.service';
+import { pressureBandFromText } from './pressure';
 import { spo2Band } from './spo2';
 
 type RecordTab = 'wounds' | 'timeline' | 'vitals' | 'meds' | 'care' | 'chat' | 'notes';
@@ -36,6 +37,7 @@ export class PatientRecordComponent {
   readonly back = output<void>();
   readonly vivace = inject(VivaceService);
   readonly spo2Band = spo2Band;
+  readonly pressureBandFromText = pressureBandFromText;
   readonly reopeningCheckIn = signal(false);
   readonly chatScroll = viewChild<ElementRef<HTMLElement>>('chatScroll');
   readonly chatSuggestions = ['Mantenha repouso e beba bastante água.', 'Envie uma foto do curativo pelo portal.', 'Vamos agendar o seu retorno. Qual o melhor horário?'];

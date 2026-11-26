@@ -44,12 +44,17 @@ const medicationAdherence = medications => {
   return slots.length ? Math.round(slots.filter(Boolean).length / slots.length * 100) : 100;
 };
 
-// Saturacao: abaixo de 90% e critica, de 90 a 94% pede atencao (sem oximetro, nao conta).
-const severityFor = checkIn => checkIn.painLevel >= 7 || checkIn.temperature >= 37.8 || checkIn.spo2 < 90
-  ? 'critico'
-  : checkIn.painLevel >= 4 || checkIn.temperature >= 37.3 || checkIn.spo2 < 95
-    ? 'atencao'
-    : 'estavel';
+// Saturacao: abaixo de 90% e critica, de 90 a 94% pede atencao. Pressao: 180/120 ou mais, ou
+// abaixo de 90/60, e critica; 140/90 ou mais pede atencao. Sem aparelho (null), nao conta.
+const severityFor = checkIn => {
+  const { systolic, diastolic } = checkIn;
+  const hasPressure = systolic != null && diastolic != null;
+  if (checkIn.painLevel >= 7 || checkIn.temperature >= 37.8 || checkIn.spo2 < 90
+    || (hasPressure && (systolic >= 180 || diastolic >= 120 || systolic < 90 || diastolic < 60))) return 'critico';
+  if (checkIn.painLevel >= 4 || checkIn.temperature >= 37.3 || checkIn.spo2 < 95
+    || (hasPressure && (systolic >= 140 || diastolic >= 90))) return 'atencao';
+  return 'estavel';
+};
 
 const notFound = () => Object.assign(new Error('Patient not found'), { statusCode: 404 });
 const denied = () => Object.assign(new Error('Insufficient permissions'), { statusCode: 403 });
@@ -246,26 +251,33 @@ export const insertCheckIn = (session, { patientId, checkIn, photo }) =>
     );
     await client.query(
       `INSERT INTO check_ins (patient_id, id, position, date, day_label, pain_level, temperature,
-         mobility_score, symptoms, notes, mood, photo_uploaded, spo2)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+         mobility_score, symptoms, notes, mood, photo_uploaded, spo2, systolic, diastolic, pulse)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
       [patientId, checkIn.id, 0, date, dayLabel, checkIn.painLevel, checkIn.temperature,
         checkIn.mobilityScore ?? 'repouso_absoluto', checkIn.symptoms ?? [], checkIn.notes ?? '',
-        checkIn.mood ?? 'bem', Boolean(photo?.imageUrl), checkIn.spo2 ?? null]
+        checkIn.mood ?? 'bem', Boolean(photo?.imageUrl), checkIn.spo2 ?? null,
+        checkIn.systolic ?? null, checkIn.diastolic ?? null, checkIn.pulse ?? null]
     );
     await client.query(
       `UPDATE patients SET current_pain = $1, current_temp = $2, last_check_in_time = $3, status = $4,
-         current_spo2 = coalesce($6, current_spo2)
+         current_spo2 = coalesce($6, current_spo2),
+         blood_pressure = coalesce($7, blood_pressure), heart_rate = coalesce($8, heart_rate)
        WHERE id = $5`,
       [checkIn.painLevel, checkIn.temperature, `Hoje às ${time}`,
-        severityFor({ painLevel: checkIn.painLevel, temperature: checkIn.temperature, spo2: checkIn.spo2 ?? null }), patientId,
-        checkIn.spo2 ?? null]
+        severityFor({
+          painLevel: checkIn.painLevel, temperature: checkIn.temperature, spo2: checkIn.spo2 ?? null,
+          systolic: checkIn.systolic ?? null, diastolic: checkIn.diastolic ?? null
+        }), patientId,
+        checkIn.spo2 ?? null,
+        checkIn.systolic == null ? null : `${checkIn.systolic}/${checkIn.diastolic} mmHg`,
+        checkIn.pulse ?? null]
     );
     await appendTimeline(client, patientId, {
       id: `tl-${checkIn.id}`,
       date: `${date} ${time}`,
       dayLabel,
       title: `Check-in Diário (${dayLabel})`,
-      description: `Dor ${checkIn.painLevel}/10, Temp ${checkIn.temperature}°C${checkIn.spo2 == null ? '' : `, Sat ${checkIn.spo2}%`}. ${checkIn.notes ?? ''}`.trim(),
+      description: `Dor ${checkIn.painLevel}/10, Temp ${checkIn.temperature}°C${checkIn.spo2 == null ? '' : `, Sat ${checkIn.spo2}%`}${checkIn.systolic == null ? '' : `, PA ${checkIn.systolic}/${checkIn.diastolic}`}. ${checkIn.notes ?? ''}`.trim(),
       author: `${patient.name} (Paciente)`,
       type: 'checkin'
     });

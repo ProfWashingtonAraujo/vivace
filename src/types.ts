@@ -44,6 +44,9 @@ export interface DailyCheckIn {
   painLevel: number; // 0-10
   temperature: number; // °C
   spo2?: number | null; // % (opcional: nem todo paciente tem oxímetro)
+  systolic?: number | null; // mmHg (opcional, vem junto com a diastólica)
+  diastolic?: number | null;
+  pulse?: number | null; // bpm (opcional)
   mobilityScore: 'repouso_absoluto' | 'caminha_pouco' | 'caminha_bem' | 'plena';
   symptoms: string[];
   notes?: string;

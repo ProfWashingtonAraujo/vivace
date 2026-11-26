@@ -202,6 +202,8 @@ Cada paciente faz **um check-in por dia**, contado no fuso de São Paulo, e só 
 
 **Saturação (SpO2).** Campo opcional do check-in (inteiro de 50 a 100; fora disso `400`), guardado em `check_ins.spo2` e no último valor em `patients.current_spo2`. Abaixo de 90% o paciente fica `critico`, de 90 a 94% `atencao`. A equipe vê a saturação, com a faixa (normal, hipóxia leve, moderada, grave), no lugar da antiga "Adesão".
 
+**Pressão arterial e pulso.** Também opcionais no check-in (migração `024`): sistólica e diastólica juntas (inteiros, 50 a 300 e 30 a 200, máxima maior que a mínima) e pulso de 20 a 250; fora disso `400`. Ficam em `check_ins.systolic/diastolic/pulse`, e o último valor atualiza `patients.blood_pressure` ("120/80 mmHg") e `heart_rate`. 180/120 ou mais, ou abaixo de 90/60, deixa o paciente `critico`; 140/90 ou mais, `atencao`. O pulso não altera o status.
+
 ### Dose tomada
 
 "Tomado" só aparece quando o **paciente** marca, e só vale no dia em que ele marcou (fuso de São Paulo). A equipe vê, mas `POST /api/medication-taken` responde `403` para profissional e admin. A migração `020` guarda o dia da marca (`medication_doses.taken_on`): marcas de outros dias, ou sem dia (as de demonstração do seed e as antigas), não contam como tomadas, então cada dia começa sem nada marcado. O seed de demonstração também deixou de trazer doses marcadas.
