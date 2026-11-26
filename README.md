@@ -194,6 +194,10 @@ Qualquer erro que escape de uma rota, como uma falha de banco ao consultar a ses
 
 Não existe mais rota que grave o estado inteiro: `PUT /api/state` responde `405`, e só o `GET /api/state` continua. Toda alteração tem endpoint próprio, com a regra de quem pode, a validação e o controle de versão (`If-Match`) descritos nas seções das áreas 1 a 5. Com isso, um salvamento com tela velha não apaga o que outra pessoa criou, e autor, data e id sempre saem do servidor. O front grava por essas chamadas, sem fila de sincronização: se o servidor recusa ou há conflito (`409`), a tela avisa e recarrega. O botão "Restaurar dados de demonstração" também não existe mais.
 
+### Check-in diário
+
+Cada paciente faz **um check-in por dia**, contado no fuso de São Paulo, e não pode refazê-lo. O servidor recusa o segundo com `409` ("O check-in de hoje já foi feito e não pode ser refeito. Volte amanhã.") e serializa envios simultâneos do mesmo paciente com um lock por paciente. Repetir o mesmo envio (mesmo `id`) continua valendo e não duplica. No portal, depois do check-in a aba mostra que o de hoje já foi feito, em vez do formulário, e há um calendário mensal com os dias já feitos marcados. A regra vale para qualquer papel que envie check-in; check-ins antigos são reconhecidos pela data gravada.
+
 ### Integração contínua
 
 `.github/workflows/ci.yml` roda em cada push com um Postgres 18 como serviço: gera um estado de teste com administrador (`scripts/make-test-state.mjs`, que exige um caminho de saída e nunca sobrescreve `.data/`), provisiona o banco pelo mesmo `npm run db:provision` do Render e executa `npm test`, o que inclui os testes de API e de RLS que precisam de banco. Um segundo job compila o front em modo de desenvolvimento e o build de produção da Vercel, que falha se a CSP não liberar a URL da API.

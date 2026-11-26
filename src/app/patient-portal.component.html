@@ -15,9 +15,9 @@
       </section>
 
       <section class="content-card space-y-4">
-        <div class="flex justify-between gap-3"><div><h2 class="font-bold">Check-in de recuperação de hoje</h2><p class="text-xs text-[#52627A]">@if (todayCheckIn(); as checkin) { Dor {{ checkin.painLevel }}/10 · Temperatura {{ checkin.temperature }}°C } @else { Você ainda não registrou sua avaliação. }</p></div><span class="text-xs font-bold px-3 py-1 h-fit rounded-xl bg-[#D1FAE5] text-[#0B5CAB]">{{ todayCheckIn() ? 'Enviado' : 'Pendente' }}</span></div>
+        <div class="flex justify-between gap-3"><div><h2 class="font-bold">Check-in de recuperação de hoje</h2><p class="text-xs text-[#52627A]">@if (todayCheckIn(); as checkin) { Dor {{ checkin.painLevel }}/10 · Temperatura {{ checkin.temperature }}°C } @else { Você ainda não registrou sua avaliação. }</p></div><span class="text-xs font-bold px-3 py-1 h-fit rounded-xl bg-[#D1FAE5] text-[#0B5CAB]">{{ checkedInToday() ? 'Enviado hoje' : 'Pendente' }}</span></div>
         @if (todayCheckIn(); as checkin) {<div class="grid grid-cols-2 sm:grid-cols-4 gap-2"><div class="summary-stat">Dor<strong>{{ checkin.painLevel }}/10</strong></div><div class="summary-stat">Temperatura<strong>{{ checkin.temperature }}°C</strong></div><div class="summary-stat">Mobilidade<strong>{{ checkin.mobilityScore.replace('_', ' ') }}</strong></div><div class="summary-stat">Foto<strong>{{ checkin.photoUploaded ? 'Enviada' : 'Sem foto' }}</strong></div></div>}
-        <button type="button" (click)="activeTab.set('checkin')" class="w-full py-3 bg-[#0B5CAB] text-white text-sm font-bold rounded-2xl">{{ todayCheckIn() ? 'Fazer novo registro' : 'Fazer check-in agora' }}</button>
+        <button type="button" (click)="activeTab.set('checkin')" class="w-full py-3 bg-[#0B5CAB] text-white text-sm font-bold rounded-2xl">{{ checkedInToday() ? 'Ver calendário de check-ins' : 'Fazer check-in agora' }}</button>
       </section>
 
       <div class="grid md:grid-cols-2 gap-4">
@@ -32,8 +32,20 @@
 
     <div ngTabPanel value="checkin">
     @if (activeTab() === 'checkin') {
+      <section class="content-card space-y-3" aria-label="Calendário de check-ins">
+        <div class="flex items-center justify-between gap-3"><h2 class="font-bold">Seus check-ins</h2><div class="flex items-center gap-1"><button type="button" (click)="shiftMonth(-1)" aria-label="Mês anterior" class="min-h-9 px-3 rounded-xl bg-[#F8FAFC] font-bold">‹</button><strong class="text-sm capitalize w-36 text-center">{{ monthTitle() }}</strong><button type="button" (click)="shiftMonth(1)" aria-label="Próximo mês" class="min-h-9 px-3 rounded-xl bg-[#F8FAFC] font-bold">›</button></div></div>
+        <div class="grid grid-cols-7 gap-1 text-center text-xs">
+          @for (weekDay of weekDays; track $index) {<span class="font-bold text-[#52627A]">{{ weekDay }}</span>}
+          @for (cell of calendarCells(); track $index) {
+            @if (cell) {<span [class]="'py-2 rounded-xl border text-xs font-bold ' + (cell.done ? 'bg-[#D1FAE5] text-[#065F46] ' : '') + (cell.today ? 'border-[#0B5CAB]' : 'border-transparent')" [attr.aria-label]="cell.day + (cell.done ? ': check-in feito' : cell.today ? ': hoje, pendente' : '')">{{ cell.day }}@if (cell.done) {<span aria-hidden="true"> ✓</span>}</span>} @else {<span></span>}
+          }
+        </div>
+        <p class="text-xs text-[#52627A]"><span class="font-bold text-[#065F46]">✓</span> dia com check-in feito · borda azul: hoje</p>
+      </section>
       @if (checkInSaved()) {
         <section class="content-card text-center py-10"><div class="w-16 h-16 mx-auto rounded-3xl bg-[#D1FAE5] text-[#0B5CAB] grid place-items-center text-2xl">✓</div><h2 class="text-2xl font-bold mt-4">Check-in registrado!</h2><p class="text-sm text-[#52627A] mt-2">Os dados foram adicionados ao acompanhamento da equipe.</p>@if (painLevel >= 7 || temperature >= 37.8) {<p class="mt-4 p-4 bg-[#FFE5E0] text-[#C2412D] rounded-2xl text-xs font-bold">Um alerta prioritário foi gerado para a equipe.</p>}<button type="button" (click)="finishCheckIn()" class="mt-5 px-7 py-3 bg-[#0B5CAB] text-white rounded-2xl text-xs font-bold">Voltar ao início</button></section>
+      } @else if (checkedInToday()) {
+        <section class="content-card text-center py-8"><div class="w-14 h-14 mx-auto rounded-3xl bg-[#D1FAE5] text-[#0B5CAB] grid place-items-center text-2xl">✓</div><h2 class="text-xl font-bold mt-4">O check-in de hoje já foi feito</h2><p class="text-sm text-[#52627A] mt-2">Cada dia tem um único check-in e ele não pode ser refeito. Volte amanhã.</p></section>
       } @else {
         <section class="content-card space-y-6"><div><span class="text-xs font-bold text-[#0B5CAB] bg-[#D1FAE5] px-3 py-1 rounded-full">Check-in diário · D+{{ patient.postOpDay }}</span><h2 class="text-2xl font-bold mt-3">Como você está se sentindo?</h2><p class="text-sm text-[#52627A]">Leva cerca de dois minutos.</p></div>
           <form (ngSubmit)="submitCheckIn()" class="space-y-5">

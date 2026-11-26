@@ -36,6 +36,29 @@ export class PatientPortalComponent {
     const day = (label: string) => Number(/\d+/.exec(label)?.[0] ?? 0);
     return this.patient()?.checkIns.reduce<DailyCheckIn | undefined>((latest, item) => !latest || day(item.dayLabel) > day(latest.dayLabel) ? item : latest, undefined);
   });
+  // Um check-in por dia, contado no fuso de São Paulo, o mesmo que o servidor usa.
+  readonly viewMonth = signal(this.currentMonth());
+  readonly doneDays = computed(() => new Set((this.patient()?.checkIns ?? []).map(item => this.dayKey(item.date))));
+  readonly checkedInToday = computed(() => this.doneDays().has(this.todayKey()));
+  readonly monthTitle = computed(() => {
+    const { year, month } = this.viewMonth();
+    return new Date(year, month, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  });
+  readonly calendarCells = computed(() => {
+    const { year, month } = this.viewMonth();
+    const today = this.todayKey();
+    const offset = new Date(year, month, 1).getDay();
+    const total = new Date(year, month + 1, 0).getDate();
+    const done = this.doneDays();
+    return [
+      ...Array.from({ length: offset }, () => null),
+      ...Array.from({ length: total }, (_, index) => {
+        const key = this.dayKey(`${index + 1}/${month + 1}/${year}`);
+        return { day: index + 1, done: done.has(key), today: key === today };
+      })
+    ];
+  });
+  readonly weekDays = ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'];
   readonly lastPhoto = computed(() => this.patient()?.woundPhotos.find(photo => !photo.imageUrl.includes('images.unsplash.com')));
 
   painLevel = this.patient()?.currentPain ?? 3;
@@ -51,6 +74,29 @@ export class PatientPortalComponent {
     'Náusea ou falta de apetite', 'Inchaço moderado', 'Tontura ao levantar',
     'Intestino preso', 'Sensação de cansaço'
   ];
+
+  shiftMonth(amount: number): void {
+    this.viewMonth.update(({ year, month }) => {
+      const next = new Date(year, month + amount, 1);
+      return { year: next.getFullYear(), month: next.getMonth() };
+    });
+  }
+
+  private currentMonth(): { year: number; month: number } {
+    const [year, month] = this.todayKey().split('/').slice(1).reverse().map(Number);
+    return { year, month: month - 1 };
+  }
+
+  private todayKey(): string {
+    const [year, month, day] = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(new Date()).split('-');
+    return this.dayKey(`${day}/${month}/${year}`);
+  }
+
+  // 'd/m/aaaa' (com ou sem zeros) vira 'dd/mm/aaaa', a forma que o servidor grava.
+  private dayKey(label: string): string {
+    const [day = '', month = '', year = ''] = label.split('/');
+    return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/${year}`;
+  }
 
   toggleSymptom(symptom: string): void {
     this.symptoms.update(items => items.includes(symptom) ? items.filter(item => item !== symptom) : [...items, symptom]);
@@ -95,7 +141,7 @@ export class PatientPortalComponent {
 
   async submitCheckIn(): Promise<void> {
     const patient = this.patient();
-    if (!patient || this.savingCheckIn()) return;
+    if (!patient || this.savingCheckIn() || this.checkedInToday()) return;
     this.savingCheckIn.set(true);
     this.photoError.set('');
     const photo = this.photoUrl()
