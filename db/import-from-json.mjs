@@ -74,6 +74,10 @@ const storeCredentials = async (client, accountId, role, password) => {
 };
 
 const insertCollections = async (client, state, warnings) => {
+  // A assinatura dos horarios (migracao 017) vai junto com a medicacao. O gatilho de
+  // medication_times recalcularia a cada horario inserido e subiria a versao da
+  // medicacao varias vezes: o import deve deixar tudo na versao 1.
+  await client.query("SELECT set_config('app.skip_times_sync', 'on', true)");
   const professionals = state.professionals ?? [];
   for (const [index, professional] of professionals.entries()) {
     await client.query(
@@ -160,10 +164,11 @@ const insertCollections = async (client, state, warnings) => {
 
     for (const [index, medication] of (patient.medications ?? []).entries()) {
       await client.query(
-        `INSERT INTO medications (patient_id, id, position, name, dose, frequency, purpose, instructions)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        `INSERT INTO medications (patient_id, id, position, name, dose, frequency, purpose, instructions, times_signature)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [patient.id, medication.id, index, medication.name ?? '', medication.dose ?? '',
-          medication.frequency ?? '', medication.purpose ?? '', medication.instructions ?? '']
+          medication.frequency ?? '', medication.purpose ?? '', medication.instructions ?? '',
+          (medication.times ?? []).join(',')]
       );
       const takenToday = medication.takenToday ?? {};
       for (const [timeIndex, time] of (medication.times ?? []).entries()) {
