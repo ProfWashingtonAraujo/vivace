@@ -1947,3 +1947,72 @@ describe('Dose tomada: so o paciente marca, e so vale no dia', () => {
     assert.equal(await takenNow(token), true);
   });
 });
+
+describe('Saturacao no check-in e reabertura do check-in pela equipe', () => {
+  const body = (id, extra = {}) => ({
+    id, patientId: 'pat-1',
+    checkIn: { dayLabel: 'D+9', painLevel: 2, temperature: 36.6, mobilityScore: 'caminha_bem', symptoms: [], notes: '', mood: 'bem', ...extra }
+  });
+  const send = (token, id, extra, keepToday = true) => call('/api/checkins', { method: 'POST', token, keepToday, body: body(id, extra) });
+
+  it('guarda a saturacao no check-in e no paciente', async () => {
+    const token = (await login('mariana')).token;
+    const result = await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-ok', { spo2: 97 }) });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.patient.currentSpo2, 97);
+    assert.equal(result.body.patient.checkIns[0].spo2, 97);
+    assert.equal(result.body.patient.status, 'estavel');
+  });
+
+  it('abaixo de 90% o paciente fica critico, de 90 a 94% em atencao', async () => {
+    const token = (await login('mariana')).token;
+    const low = await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-88', { spo2: 88 }) });
+    assert.equal(low.body.patient.status, 'critico');
+    const mid = await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-92', { spo2: 92 }) });
+    assert.equal(mid.body.patient.status, 'atencao');
+  });
+
+  it('sem saturacao o check-in vale e o ultimo valor continua', async () => {
+    const token = (await login('mariana')).token;
+    await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-first', { spo2: 96 }) });
+    const result = await call('/api/checkins', { method: 'POST', token, body: body('chk-spo2-none') });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.patient.checkIns[0].spo2, null);
+    assert.equal(result.body.patient.currentSpo2, 96);
+  });
+
+  it('saturacao fora de 50 a 100 ou nao inteira: 400', async () => {
+    const token = (await login('mariana')).token;
+    for (const spo2 of [49, 101, 90.5, 'abc']) {
+      assert.equal((await call('/api/checkins', { method: 'POST', token, body: body(`chk-spo2-bad-${spo2}`, { spo2 }) })).status, 400, `spo2 ${spo2}`);
+    }
+  });
+
+  it('o check-in de hoje so reabre pela equipe, e o historico guarda os dois', async () => {
+    const patient = (await login('mariana')).token;
+    const staff = (await login('Rafaely Carvalho')).token;
+    assert.equal((await call('/api/checkins', { method: 'POST', token: patient, body: body('chk-reopen-1') })).status, 201);
+
+    const again = await send(patient, 'chk-reopen-2');
+    assert.equal(again.status, 409);
+    assert.match(again.body.error, /reabri/i);
+
+    assert.equal((await call('/api/patients/pat-1/check-in/reopen', { method: 'POST', token: patient })).status, 403);
+
+    const reopened = await call('/api/patients/pat-1/check-in/reopen', { method: 'POST', token: staff });
+    assert.equal(reopened.status, 200);
+    assert.equal(reopened.body.patient.checkInReopened, true);
+    assert.equal(reopened.body.patient.timeline.at(-1).title, 'Check-in reaberto');
+    const seen = (await call('/api/state', { token: patient })).body.patients[0];
+    assert.equal(seen.checkInReopened, true, 'o paciente tem que ver o check-in reaberto');
+
+    const second = await send(patient, 'chk-reopen-2', { painLevel: 3 });
+    assert.equal(second.status, 201);
+    assert.equal(second.body.patient.checkInReopened, false);
+    const ids = second.body.patient.checkIns.map(item => item.id);
+    assert.ok(ids.includes('chk-reopen-1') && ids.includes('chk-reopen-2'), 'o envio anterior sumiu');
+    assert.equal(ids[0], 'chk-reopen-2');
+
+    assert.equal((await send(patient, 'chk-reopen-3')).status, 409, 'reabrir libera so mais um envio');
+  });
+});

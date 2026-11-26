@@ -486,8 +486,11 @@ const handleRequest = async (request, response) => {
       const payload = input.checkIn;
       const painLevel = Number(payload?.painLevel);
       const temperature = Number(payload?.temperature);
+      // Saturação é opcional (nem todo paciente tem oxímetro): vazia vira null; informada, é inteira de 50 a 100.
+      const spo2 = payload?.spo2 === undefined || payload.spo2 === null || payload.spo2 === '' ? null : Number(payload.spo2);
       if (!patientId || !payload || !Number.isFinite(painLevel) || painLevel < 0 || painLevel > 10
-        || !Number.isFinite(temperature) || temperature < 25 || temperature > 45) {
+        || !Number.isFinite(temperature) || temperature < 25 || temperature > 45
+        || (spo2 !== null && (!Number.isInteger(spo2) || spo2 < 50 || spo2 > 100))) {
         json(request, response, 400, { error: 'Invalid check-in' });
         return;
       }
@@ -503,6 +506,7 @@ const handleRequest = async (request, response) => {
         id: shortText(input.id, `chk-${randomUUID()}`),
         painLevel,
         temperature,
+        spo2,
         mobilityScore: shortText(payload.mobilityScore, 'repouso_absoluto'),
         symptoms: Array.isArray(payload.symptoms)
           ? payload.symptoms.filter(item => typeof item === 'string' && item.length <= maxShortField).slice(0, 12)
@@ -857,6 +861,29 @@ const handleRequest = async (request, response) => {
     } catch (error) {
       console.error('Clinical note API error:', error);
       json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not save note') });
+    }
+    return;
+  }
+
+  const reopenRoute = /^\/api\/patients\/([^/]+)\/check-in\/reopen$/.exec(pathname);
+  if (reopenRoute && request.method === 'POST') {
+    const session = await authorize(request, response);
+    if (!session) return;
+    if (session.role === 'patient') {
+      forbidden(request, response);
+      return;
+    }
+    try {
+      const patientId = pathId(reopenRoute[1]);
+      if (!patientId) {
+        json(request, response, 404, { error: 'Patient not found' });
+        return;
+      }
+      json(request, response, 200, { patient: await store.reopenCheckIn(session, { patientId }) });
+      publishSafely({ type: 'patient.changed', patientId, change: 'updated' });
+    } catch (error) {
+      console.error('Reopen check-in API error:', error);
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not reopen check-in') });
     }
     return;
   }

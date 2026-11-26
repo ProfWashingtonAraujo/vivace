@@ -73,7 +73,7 @@
           <div class="grid grid-cols-3 gap-2 my-4 p-3 bg-[#F8FAFC] rounded-2xl text-xs">
             <div><small class="block text-[#52627A]">Dor EVA</small><strong>{{ patient.currentPain }}/10</strong></div>
             <div><small class="block text-[#52627A]">Temperatura</small><strong>{{ patient.currentTemp }}°C</strong></div>
-            <div><small class="block text-[#52627A]">Adesão</small><strong>{{ patient.medicationAdherencePercent }}%</strong></div>
+            <div><small class="block text-[#52627A]">Saturação</small><strong [class]="spo2Band(patient.currentSpo2).textClass">{{ patient.currentSpo2 == null ? '—' : patient.currentSpo2 + '%' }}</strong></div>
           </div>
           <div class="flex justify-between text-xs"><span [class.text-[#92400E]]="patient.woundReviewPending">{{ patient.woundReviewPending ? 'Foto aguardando avaliação' : 'Curativo avaliado' }}</span><strong class="text-[#0B5CAB]">Ver prontuário →</strong></div>
         </button>

@@ -2,7 +2,7 @@
 // A ordem de cada colecao vem de `position`, que guarda o indice do array no
 // JSON, porque o frontend depende dela (checkIns[0] e "hoje", medications.slice(0,2)).
 
-import { brToday } from '../lib/br-time.mjs';
+import { brDateTime, brToday } from '../lib/br-time.mjs';
 import { displayedSurgeon } from '../lib/surgeon.mjs';
 
 const ordered = rows => [...rows].sort((a, b) => a.position - b.position);
@@ -47,6 +47,14 @@ export const readMedications = (medications, times, doses) => medications.map(me
   };
 });
 
+// A equipe reabriu o check-in de hoje e o paciente ainda nao enviou outro depois disso.
+export const checkInReopened = (row, checkIns) => {
+  if (!row.check_in_reopened_at) return false;
+  const reopened = new Date(row.check_in_reopened_at);
+  if (brDateTime(reopened).date !== brDateTime().date) return false;
+  return !checkIns.some(checkIn => checkIn.created_at && new Date(checkIn.created_at) > reopened);
+};
+
 const buildPatient = (row, { timeline, photos, medications, times, doses, checkIns, messages, instructions, notes, surgeon }) => ({
   id: row.id,
   version: row.version,
@@ -69,6 +77,8 @@ const buildPatient = (row, { timeline, photos, medications, times, doses, checkI
   lastCheckInTime: row.last_check_in_time,
   currentPain: row.current_pain,
   currentTemp: toNumber(row.current_temp),
+  currentSpo2: row.current_spo2 ?? null,
+  checkInReopened: checkInReopened(row, checkIns),
   bloodPressure: row.blood_pressure,
   heartRate: row.heart_rate,
   woundReviewPending: row.wound_review_pending,
@@ -105,6 +115,7 @@ const buildPatient = (row, { timeline, photos, medications, times, doses, checkI
     dayLabel: checkIn.day_label,
     painLevel: checkIn.pain_level,
     temperature: toNumber(checkIn.temperature),
+    spo2: checkIn.spo2 ?? null,
     mobilityScore: checkIn.mobility_score,
     symptoms: checkIn.symptoms,
     notes: checkIn.notes,

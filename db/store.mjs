@@ -44,9 +44,10 @@ const medicationAdherence = medications => {
   return slots.length ? Math.round(slots.filter(Boolean).length / slots.length * 100) : 100;
 };
 
-const severityFor = checkIn => checkIn.painLevel >= 7 || checkIn.temperature >= 37.8
+// Saturacao: abaixo de 90% e critica, de 90 a 94% pede atencao (sem oximetro, nao conta).
+const severityFor = checkIn => checkIn.painLevel >= 7 || checkIn.temperature >= 37.8 || checkIn.spo2 < 90
   ? 'critico'
-  : checkIn.painLevel >= 4 || checkIn.temperature >= 37.3
+  : checkIn.painLevel >= 4 || checkIn.temperature >= 37.3 || checkIn.spo2 < 95
     ? 'atencao'
     : 'estavel';
 
@@ -231,9 +232,12 @@ export const insertCheckIn = (session, { patientId, checkIn, photo }) =>
     const now = new Date();
     const time = patientTimestamp(now);
     const date = new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(now);
-    // Um check-in por dia (no fuso de São Paulo) e sem refazer: o de hoje já existe, com outro id.
-    const today = await client.query('SELECT 1 FROM check_ins WHERE patient_id = $1 AND date = $2', [patientId, date]);
-    if (today.rows.length) throw conflict('Daily check-in already done', 'O check-in de hoje já foi feito e não pode ser refeito. Volte amanhã.');
+    // Um check-in por dia (no fuso de São Paulo), a menos que a equipe tenha reaberto o de hoje
+    // depois do último envio. O histórico guarda todos.
+    const today = await client.query('SELECT created_at FROM check_ins WHERE patient_id = $1 AND date = $2', [patientId, date]);
+    if (today.rows.length && !patient.checkInReopened) {
+      throw conflict('Daily check-in already done', 'O check-in de hoje já foi feito. Se precisar refazer, peça à equipe para reabri-lo.');
+    }
     const dayLabel = checkIn.dayLabel || `D+${patient.postOpDay}`;
 
     // A UI le checkIns[0] como "hoje", entao o novo entra no inicio da lista.
@@ -242,24 +246,26 @@ export const insertCheckIn = (session, { patientId, checkIn, photo }) =>
     );
     await client.query(
       `INSERT INTO check_ins (patient_id, id, position, date, day_label, pain_level, temperature,
-         mobility_score, symptoms, notes, mood, photo_uploaded)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+         mobility_score, symptoms, notes, mood, photo_uploaded, spo2)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [patientId, checkIn.id, 0, date, dayLabel, checkIn.painLevel, checkIn.temperature,
         checkIn.mobilityScore ?? 'repouso_absoluto', checkIn.symptoms ?? [], checkIn.notes ?? '',
-        checkIn.mood ?? 'bem', Boolean(photo?.imageUrl)]
+        checkIn.mood ?? 'bem', Boolean(photo?.imageUrl), checkIn.spo2 ?? null]
     );
     await client.query(
-      `UPDATE patients SET current_pain = $1, current_temp = $2, last_check_in_time = $3, status = $4
+      `UPDATE patients SET current_pain = $1, current_temp = $2, last_check_in_time = $3, status = $4,
+         current_spo2 = coalesce($6, current_spo2)
        WHERE id = $5`,
       [checkIn.painLevel, checkIn.temperature, `Hoje às ${time}`,
-        severityFor({ painLevel: checkIn.painLevel, temperature: checkIn.temperature }), patientId]
+        severityFor({ painLevel: checkIn.painLevel, temperature: checkIn.temperature, spo2: checkIn.spo2 ?? null }), patientId,
+        checkIn.spo2 ?? null]
     );
     await appendTimeline(client, patientId, {
       id: `tl-${checkIn.id}`,
       date: `${date} ${time}`,
       dayLabel,
       title: `Check-in Diário (${dayLabel})`,
-      description: `Dor ${checkIn.painLevel}/10, Temp ${checkIn.temperature}°C. ${checkIn.notes ?? ''}`.trim(),
+      description: `Dor ${checkIn.painLevel}/10, Temp ${checkIn.temperature}°C${checkIn.spo2 == null ? '' : `, Sat ${checkIn.spo2}%`}. ${checkIn.notes ?? ''}`.trim(),
       author: `${patient.name} (Paciente)`,
       type: 'checkin'
     });
@@ -920,6 +926,26 @@ export const deleteAdmin = (session, { id, version }) =>
     await client.query('DELETE FROM admins WHERE id = $1', [id]);
     await dropSessions(client, 'admin', id);
     return { id };
+  });
+
+// A equipe libera mais um check-in hoje. Nada é apagado: o envio anterior fica no histórico.
+export const reopenCheckIn = (session, { patientId }) =>
+  withSession(pool, session, async client => {
+    staffOrThrow(session);
+    const patient = await client.query('SELECT post_op_day FROM patients WHERE id = $1', [patientId]);
+    if (!patient.rows.length) throw notFound();
+    await client.query('UPDATE patients SET check_in_reopened_at = now() WHERE id = $1', [patientId]);
+    const { date, time } = brDateTime();
+    await appendTimeline(client, patientId, {
+      id: `tl-${randomUUID()}`,
+      date: `${date} ${time}`,
+      dayLabel: `D+${patient.rows[0].post_op_day}`,
+      title: 'Check-in reaberto',
+      description: `${session.name} liberou um novo check-in para hoje.`,
+      author: session.name,
+      type: 'checkin'
+    });
+    return readPatient(client, patientId);
   });
 
 export const setPatientStatus = (session, { patientId, status }) =>

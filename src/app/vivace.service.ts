@@ -296,6 +296,15 @@ export class VivaceService {
     return true;
   }
 
+  // A equipe libera mais um check-in hoje; o envio anterior continua no histórico.
+  async reopenCheckIn(patientId: string): Promise<boolean> {
+    const result = await this.call<{ patient: Patient }>('POST', `/api/patients/${encodeURIComponent(patientId)}/check-in/reopen`);
+    if (!result.ok) return false;
+    this.mergePatient(result.data.patient);
+    this.notify('Check-in reaberto. O paciente já pode enviar outro hoje.');
+    return true;
+  }
+
   private mergePatient(patient: Patient): void {
     if (!this.token) return;
     this.patientsState.update(patients => patients.map(item => item.id === patient.id ? this.normalizePatient(patient) : item));
