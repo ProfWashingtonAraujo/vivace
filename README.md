@@ -209,6 +209,19 @@ Medicações e instruções continuam sendo apagadas pelo `PUT` (há tela para i
 
 `.github/workflows/ci.yml` roda em cada push com um Postgres 18 como serviço: gera um estado de teste com administrador (`scripts/make-test-state.mjs`, que exige um caminho de saída e nunca sobrescreve `.data/`), provisiona o banco pelo mesmo `npm run db:provision` do Render e executa `npm test`, o que inclui os testes de API e de RLS que precisam de banco. Um segundo job compila o front em modo de desenvolvimento e o build de produção da Vercel, que falha se a CSP não liberar a URL da API.
 
+### Ações da equipe (fase 2, área 1)
+
+Primeiras chamadas próprias que substituem o `PUT /api/state`. Em todas, o servidor decide autor, revisor, data e id (da sessão e do relógio dele, no fuso de São Paulo); o corpo traz só a intenção, e qualquer `author`, `reviewedBy`, `date` ou `id` enviado é ignorado.
+
+| Chamada | Corpo | Resposta |
+| --- | --- | --- |
+| `POST /api/patients/:id/clinical-notes` | `{ text, clientId? }` | `201 { note }`; `200` com a mesma nota se o `clientId` se repetir |
+| `PUT /api/patients/:id/wound-photos/:photoId/review` | `{ status, feedback? }` com `status` `avaliado_adequado` ou `requer_atencao` | `200 { photo, timelineEventId, woundReviewPending }` |
+
+A nota entra no início da lista, tem até 2000 caracteres e só a equipe com acesso ao paciente a cria (`403` para o paciente, `404` para quem não vê o paciente). A avaliação registra o revisor e a hora, acrescenta o evento "Cicatrização aprovada" ou "Ferida requer atenção" à linha do tempo e recalcula a marca de revisão pendente do paciente, tudo na mesma transação; o comentário vai até 1000 caracteres. `clientId` é a chave de idempotência: repetir a chamada não duplica a nota.
+
+Em tempo real, uma nota gera `clinical-note.created`, **só para a equipe e sem o texto** (até a existência de uma nota é dela), e uma avaliação gera `wound-photo.reviewed`, que o paciente dono também recebe, sem o comentário. O `POST /api/messages` passou a usar sempre o nome da sessão como remetente, para os dois lados. A marcação de mensagem como lida não ganhou chamada porque nenhuma tela a usa: o front nunca marca `isRead`.
+
 ### Administrador inicial
 
 O primeiro administrador é criado por `app_bootstrap_admin` (migração `014`), uma função `SECURITY DEFINER` chamada com o papel `vivace_api`. Ela só cria quando **não existe nenhum administrador**, de forma atômica (duas chamadas simultâneas não criam duas contas) e nunca altera uma conta existente nem a senha dela. O servidor a chama uma vez na subida e memoiza o sucesso; antes ela rodava a cada login, abrindo uma conexão de dono do banco só para perguntar se já havia admin. A conversão de uma senha antiga em texto plano para `scrypt` passa por `app_set_credential`, o mesmo caminho de escrita das senhas do `PUT`.

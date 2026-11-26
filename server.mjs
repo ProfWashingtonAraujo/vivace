@@ -12,6 +12,7 @@ import { resolveBootstrap } from './lib/bootstrap-config.mjs';
 import { parseJson, readBody, safeHandler } from './lib/http.mjs';
 import { parseImageUpload } from './lib/image-upload.mjs';
 import { removesLastAdmin } from './lib/state-guards.mjs';
+import { validateNote, validateReview } from './lib/staff-actions.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const apiPort = Number(process.env.VIVACE_API_PORT ?? 3001);
@@ -185,7 +186,7 @@ const bootstrapConfig = resolveBootstrap();
 const shortText = (value, fallback) => (typeof value === 'string' && value && value.length <= maxShortField ? value : fallback);
 
 const failureStatus = error => ([400, 403, 404, 409, 413].includes(error.statusCode) ? error.statusCode : 500);
-const failureMessage = (error, fallback) => ({
+const failureMessage = (error, fallback) => error.publicMessage ?? ({
   400: 'Requisição inválida',
   403: 'Insufficient permissions',
   404: 'Patient not found',
@@ -451,9 +452,9 @@ const handleRequest = async (request, response) => {
         return;
       }
       const sender = session.role === 'patient' ? 'paciente' : 'equipe';
-      const senderName = session.role === 'patient'
-        ? session.name
-        : shortText(typeof input.senderName === 'string' ? input.senderName.trim() : '', session.name);
+      // O nome de quem enviou é o da sessão, para os dois lados. O cliente nunca escolhe
+      // com que nome uma mensagem aparece para a outra parte.
+      const senderName = session.name;
       const message = await store.insertMessage(session, {
         patientId: input.patientId,
         text,
@@ -538,6 +539,78 @@ const handleRequest = async (request, response) => {
     } catch (error) {
       console.error('Medication API error:', error);
       json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not save confirmation') });
+    }
+    return;
+  }
+
+  // Identificador de paciente ou de foto vindo da URL: decodifica e limita o tamanho.
+  const pathId = value => {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(value);
+    } catch {
+      return null;
+    }
+    return decoded && decoded.length <= maxShortField ? decoded : null;
+  };
+
+  const noteRoute = /^\/api\/patients\/([^/]+)\/clinical-notes$/.exec(pathname);
+  if (noteRoute && request.method === 'POST') {
+    const session = await authorize(request, response);
+    if (!session) return;
+    if (session.role === 'patient') {
+      forbidden(request, response);
+      return;
+    }
+    try {
+      const patientId = pathId(noteRoute[1]);
+      if (!patientId) {
+        json(request, response, 404, { error: 'Patient not found' });
+        return;
+      }
+      const input = validateNote(parseJson(await readBody(request, bodyLimits.message)));
+      if (!input.ok) {
+        json(request, response, 400, { error: 'Invalid note' });
+        return;
+      }
+      const { note, created } = await store.addClinicalNote(session, { patientId, text: input.text, clientId: input.clientId });
+      json(request, response, created ? 201 : 200, { note });
+      // Só a equipe recebe, e sem o texto: até a existência de uma nota é dela.
+      if (created) publishSafely({ type: 'clinical-note.created', patientId, noteId: note.id, staffOnly: true });
+    } catch (error) {
+      console.error('Clinical note API error:', error);
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not save note') });
+    }
+    return;
+  }
+
+  const reviewRoute = /^\/api\/patients\/([^/]+)\/wound-photos\/([^/]+)\/review$/.exec(pathname);
+  if (reviewRoute && request.method === 'PUT') {
+    const session = await authorize(request, response);
+    if (!session) return;
+    if (session.role === 'patient') {
+      forbidden(request, response);
+      return;
+    }
+    try {
+      const patientId = pathId(reviewRoute[1]);
+      const photoId = pathId(reviewRoute[2]);
+      if (!patientId || !photoId) {
+        json(request, response, 404, { error: 'Photo not found' });
+        return;
+      }
+      const input = validateReview(parseJson(await readBody(request, bodyLimits.message)));
+      if (!input.ok) {
+        json(request, response, 400, { error: 'Invalid review' });
+        return;
+      }
+      const result = await store.reviewWoundPhoto(session, { patientId, photoId, status: input.status, feedback: input.feedback });
+      json(request, response, 200, result);
+      // O paciente dono também recebe (a avaliação é dele), mas o comentário não vai no aviso.
+      publishSafely({ type: 'wound-photo.reviewed', patientId, photoId, reviewStatus: input.status });
+    } catch (error) {
+      console.error('Photo review API error:', error);
+      json(request, response, failureStatus(error), { error: failureMessage(error, 'Could not save review') });
     }
     return;
   }

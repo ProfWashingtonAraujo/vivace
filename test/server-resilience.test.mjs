@@ -149,3 +149,20 @@ describe('I10: o token nunca vale na URL e as respostas levam cabecalhos de segu
     assert.equal(response.headers.get('referrer-policy'), 'no-referrer');
   });
 });
+
+describe('area 1: as rotas novas exigem autenticacao e nao existem para outros metodos', () => {
+  it('criar nota sem token responde 401', async () => {
+    assert.equal((await post('/api/patients/pat-1/clinical-notes', JSON.stringify({ text: 'x' }))).status, 401);
+  });
+
+  it('avaliar foto sem token responde 401', async () => {
+    const response = await fetch(`${base}/api/patients/pat-1/wound-photos/wp-1/review`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'avaliado_adequado' })
+    });
+    assert.equal(response.status, 401);
+  });
+
+  it('ler as notas por GET nao e uma rota (as notas saem em /api/state)', async () => {
+    assert.equal((await fetch(`${base}/api/patients/pat-1/clinical-notes`)).status, 404);
+  });
+});

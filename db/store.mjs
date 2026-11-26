@@ -2,6 +2,8 @@ import { createHash, randomUUID, scrypt as scryptCallback } from 'node:crypto';
 import { readAggregate, readPatient } from './aggregate.mjs';
 import { asAdmin, createPool, withSession } from './session.mjs';
 import { exceedsDeletionLimit, idsMarkedRead } from '../lib/state-guards.mjs';
+import { brDateTime } from '../lib/br-time.mjs';
+import { reviewTimelineTitle } from '../lib/staff-actions.mjs';
 
 const pool = createPool();
 
@@ -664,4 +666,86 @@ export const toggleMedicationTaken = (session, { patientId, medicationId, time }
     const updated = medicationAdherence((await readPatient(client, patientId)).medications);
     await client.query('UPDATE patients SET medication_adherence_percent = $1 WHERE id = $2', [updated, patientId]);
     return readPatient(client, patientId);
+  });
+
+// ------------------------------------------------- acoes que so a equipe faz
+//
+// Cada uma decide no servidor o que o cliente não pode decidir: autor, revisor, data
+// e id vêm da sessão e do relógio do servidor, e o corpo só traz a intenção.
+
+// Nota clínica. `clientId` é a chave de idempotência: repetir a chamada com o mesmo
+// valor devolve a nota que já existe em vez de criar outra.
+export const addClinicalNote = (session, { patientId, text, clientId }) =>
+  withSession(pool, session, async client => {
+    if (session.role === 'patient') throw denied();
+    const visible = await client.query('SELECT 1 FROM patients WHERE id = $1', [patientId]);
+    if (!visible.rows.length) throw notFound();
+
+    const id = clientId ?? `cn-${randomUUID()}`;
+    const { date, time } = brDateTime();
+    // ON CONFLICT DO NOTHING: duas chamadas simultâneas com o mesmo clientId não
+    // quebram na chave primária, a segunda só não insere e cai na leitura abaixo.
+    const inserted = await client.query(
+      `INSERT INTO clinical_notes (patient_id, id, position, author, date, text)
+       VALUES ($1, $2, (SELECT coalesce(min(position), 1) - 1 FROM clinical_notes WHERE patient_id = $1), $3, $4, $5)
+       ON CONFLICT (patient_id, id) DO NOTHING
+       RETURNING id, author, date, text`,
+      [patientId, id, session.name, `${date} ${time}`, text]
+    );
+    if (inserted.rows[0]) return { note: inserted.rows[0], created: true };
+    const existing = await client.query(
+      'SELECT id, author, date, text FROM clinical_notes WHERE patient_id = $1 AND id = $2', [patientId, id]
+    );
+    return { note: existing.rows[0], created: false };
+  });
+
+const photoNotFound = () => Object.assign(new Error('Photo not found'), { statusCode: 404, publicMessage: 'Photo not found' });
+
+// Avaliação de uma foto da ferida. O revisor é o usuário da sessão, a hora é a do
+// servidor, e o evento da linha do tempo e a marca de "revisão pendente" do paciente
+// são consequências da avaliação, registradas na mesma transação.
+export const reviewWoundPhoto = (session, { patientId, photoId, status, feedback }) =>
+  withSession(pool, session, async client => {
+    if (session.role === 'patient') throw denied();
+    const patient = await client.query('SELECT post_op_day FROM patients WHERE id = $1', [patientId]);
+    if (!patient.rows.length) throw notFound();
+    const photo = await client.query('SELECT 1 FROM wound_photos WHERE patient_id = $1 AND id = $2', [patientId, photoId]);
+    if (!photo.rows.length) throw photoNotFound();
+
+    const { date, time } = brDateTime();
+    const reviewedAt = `${date} às ${time}`;
+    await client.query(
+      `UPDATE wound_photos
+          SET review_status = $3, review_feedback = $4, reviewed_by = $5, reviewed_at = $6
+        WHERE patient_id = $1 AND id = $2`,
+      [patientId, photoId, status, feedback, session.name, reviewedAt]
+    );
+
+    const timelineEventId = `tl-${randomUUID()}`;
+    await appendTimeline(client, patientId, {
+      id: timelineEventId,
+      date: `${date} ${time}`,
+      dayLabel: `D+${patient.rows[0].post_op_day}`,
+      title: reviewTimelineTitle(status),
+      description: feedback,
+      author: session.name,
+      type: 'curativo'
+    });
+
+    // Mesma regra do front (isRealWoundPhoto): foto de demonstração, que só tem URL do
+    // unsplash, não conta como pendente.
+    const pending = (await client.query(
+      `SELECT EXISTS (
+         SELECT 1 FROM wound_photos
+          WHERE patient_id = $1 AND review_status = 'pendente'
+            AND coalesce(image_source_url, '') NOT LIKE '%images.unsplash.com%') AS pending`,
+      [patientId]
+    )).rows[0].pending;
+    await client.query('UPDATE patients SET wound_review_pending = $2 WHERE id = $1', [patientId, pending]);
+
+    return {
+      photo: { id: photoId, reviewStatus: status, reviewFeedback: feedback, reviewedBy: session.name, reviewedAt },
+      timelineEventId,
+      woundReviewPending: pending
+    };
   });
