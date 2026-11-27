@@ -23,6 +23,20 @@
     });
   }
 
+  // Botão fixo do WhatsApp (celular): aparece quando o do hero sai da tela e some no fechamento.
+  var dock = document.getElementById('dock');
+  var heroBtn = document.querySelector('.vh-cta .vh-btn');
+  var contact = document.getElementById('contato');
+  if (dock && heroBtn && contact && 'IntersectionObserver' in window) {
+    var heroSeen = true, inContact = false;
+    var sync = function () {
+      var pastHero = !heroSeen && heroBtn.getBoundingClientRect().top < 0;
+      dock.classList.toggle('show', pastHero && !inContact);
+    };
+    new IntersectionObserver(function (es) { heroSeen = es[0].isIntersecting; sync(); }).observe(heroBtn);
+    new IntersectionObserver(function (es) { inContact = es[0].isIntersecting; sync(); }, { threshold: 0.25 }).observe(contact);
+  }
+
   var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   if (reduce || !('IntersectionObserver' in window)) return;
 

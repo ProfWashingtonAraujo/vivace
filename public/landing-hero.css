@@ -72,19 +72,23 @@
 .vh-js.vh-go .vh-badge{opacity:1;transform:rotate(6deg)}
 
 @media (max-width:900px){
-  .vh-hero{grid-template-columns:1fr;gap:28px;padding:88px 20px 40px;align-items:start}
-  .vh-hero{--pad:20px}
+  .vh-hero{--pad:max(20px,6vw);min-height:0;grid-template-columns:1fr;gap:34px;padding:108px var(--pad) 48px;align-items:start}
   .vh-nav .vh-btn .vh-t{display:none}
-  .vh-stage{order:-1;width:100%;max-width:560px}
-  .vh-photo{aspect-ratio:4/2.8;border-radius:28px}
-  .vh-badge{top:-16px;right:-6px;width:52px;height:52px;border-radius:16px}
-  .vh-badge svg{width:24px;height:24px}
+  .vh-stage{order:-1;width:100%;max-width:560px;justify-self:center}
+  /* camada azul atrás da foto: o gesto da onda da marca, em escala de celular */
+  .vh-stage::before{content:'';position:absolute;z-index:-1;inset:22px -12px -16px 26px;border-radius:32px;background:linear-gradient(160deg,#0B4FA8,#0A459A)}
+  .vh-photo{aspect-ratio:4/3.3;border-radius:30px}
+  .vh-badge{top:-14px;right:-4px;width:50px;height:50px;border-radius:16px}
+  .vh-badge svg{width:23px;height:23px}
   .vh-pill{left:12px;right:12px;bottom:12px;max-width:none;font-size:12.5px;padding:10px 14px 10px 10px}
-  .vh-wave{width:100%;top:84px;height:244px}
-  .vh-wave-2{display:none}
-  .vh-cta{align-items:stretch}
+  .vh-wave,.vh-wave-2{display:none}
+  .vh-cta{align-items:stretch;max-width:520px}
   .vh-cta .vh-btn{width:100%;justify-content:space-between;padding-left:24px}
-  .vh-hero h1{font-size:clamp(38px,10.6vw,52px)}
+  .vh-btn:active{transform:scale(.97)}
+  .vh-hero h1{font-size:clamp(32px,9.2vw,50px)}
+  .vh-lead{margin-top:20px}
+  .vh-js .vh-stage::before{opacity:0;transform:translate(26px,26px);transition:opacity .9s var(--ease) .5s,transform 1.3s var(--ease) .5s}
+  .vh-js.vh-go .vh-stage::before{opacity:1;transform:none}
 }
 @media (min-width:901px) and (max-height:760px){
   .vh-hero{padding-top:92px;padding-bottom:40px}
@@ -95,5 +99,6 @@
   .vh-js .vh-rise,.vh-js .vh-photo,.vh-js .vh-photo img,.vh-js .vh-pill,.vh-js .vh-badge{opacity:1;transform:none;filter:none;transition:none}
   .vh-js .vh-badge{transform:rotate(6deg)}
   .vh-js .vh-wave{clip-path:none!important;transition:none!important}
+  .vh-js .vh-stage::before{opacity:1;transform:none;transition:none}
   .vh-btn,.vh-btn .vh-wa{transition:none}
 }
