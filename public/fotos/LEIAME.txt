@@ -1,0 +1,4 @@
+Fotos da landing (landing.html)
+
+hero.webp (opcional): foto sem texto para o topo, formato 4:3, ideal 1200x900.
+post-1..4.webp: faixa "Conheca as poltronas" (posts do Instagram, proporcao 4:5).
